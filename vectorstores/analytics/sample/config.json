@@ -1,0 +1,9 @@
+{
+  "team": "analytics",
+  "project": "sample",
+  "model": "all-MiniLM-L6-v2",
+  "dim": 384,
+  "count": 2,
+  "source": "C:\\Users\\mkhan\\OneDrive\\Documents\\RAG-Agent\\sample_project",
+  "doc_type": "project"
+}

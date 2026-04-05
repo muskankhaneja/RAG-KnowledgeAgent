@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RAG Agent UI</title>
+  <style>
+    body {font-family: Arial, sans-serif; margin: 20px; max-width: 900px;}
+    input, textarea, select {width: 100%; margin: 6px 0; padding: 8px;}
+    button {margin-top: 8px; padding: 10px 14px;}
+    #output {background:#f7f7f7; padding:12px; border:1px solid #ddd; min-height:140px; white-space:pre-wrap;}
+  </style>
+</head>
+<body>
+  <h1>RAG Agent UI</h1>
+  <p>Using endpoint <strong>/ingest</strong>, <strong>/upload</strong>, <strong>/query</strong>.</p>
+
+  <h2>1) Ingest project</h2>
+  <label>Team <input id="team" value="analytics"/></label>
+  <label>Project <input id="project" value="sample"/></label>
+  <label>Local source folder path <input id="source" value=""/></label>
+  <label>Doc type <input id="doc_type" value="mixed"/></label>
+  <button onclick="doIngest()">Ingest</button>
+
+  <h2>2) Upload ad-hoc document</h2>
+  <label>Filename <input id="filename" value="doc.md"/></label>
+  <label>Content <textarea id="content" rows="4">Example note text for caching.</textarea></label>
+  <button onclick="doUpload()">Upload + Rebuild Index</button>
+
+  <h2>3) Query/Chat</h2>
+  <label>Query <textarea id="queryText" rows="2">How does add function work?</textarea></label>
+  <label>TopK <input id="topK" type="number" value="5"/></label>
+  <label>Use LLM <select id="useLLM"><option value="false" selected>false</option><option value="true">true</option></select></label>
+  <button onclick="doQuery()">Run Query</button>
+
+  <h2>Response</h2>
+  <div id="output">-- responses appear here --</div>
+
+  <script src="./app.js"></script>
+</body>
+</html>

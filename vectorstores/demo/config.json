@@ -1,0 +1,7 @@
+{
+  "project": "demo",
+  "model": "all-MiniLM-L6-v2",
+  "dim": 384,
+  "count": 1,
+  "source": "https://github.com/octocat/Hello-World.git"
+}
