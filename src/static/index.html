@@ -3,39 +3,235 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>RAG Agent UI</title>
+  <title>RAG Agent</title>
   <style>
-    body {font-family: Arial, sans-serif; margin: 20px; max-width: 900px;}
-    input, textarea, select {width: 100%; margin: 6px 0; padding: 8px;}
-    button {margin-top: 8px; padding: 10px 14px;}
-    #output {background:#f7f7f7; padding:12px; border:1px solid #ddd; min-height:140px; white-space:pre-wrap;}
+    :root {
+      --bg-dark:    #0f1117;
+      --bg-panel:   #1a1d27;
+      --bg-section: #22263a;
+      --bg-hover:   #2c3150;
+      --accent:     #4f8ef7;
+      --accent-dim: #2d5fbf;
+      --green:      #3ecf8e;
+      --red:        #e05252;
+      --grey:       #4a5170;
+      --text:       #e2e6f0;
+      --text-dim:   #8892a4;
+      --border:     #2e3350;
+      --radius:     8px;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; font-family: 'Segoe UI', Arial, sans-serif; background: var(--bg-dark); color: var(--text); }
+
+    .container { display: flex; height: 100vh; overflow: hidden; }
+
+    /* ── Left pane ── */
+    .left-pane { width: 340px; min-width: 260px; background: var(--bg-panel); border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; }
+    .pane-header { padding: 18px 20px 10px; font-size: 1.2em; font-weight: 700; letter-spacing: 0.03em; color: var(--accent); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+
+    .left-top    { flex: 1; overflow-y: auto; padding: 14px 14px 4px; }
+    .left-bottom { flex-shrink: 0; padding: 10px 14px 16px; border-top: 1px solid var(--border); background: var(--bg-panel); }
+
+    /* ── Section boxes ── */
+    .section { background: var(--bg-section); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; margin-bottom: 12px; }
+    .section h3 { margin: 0 0 10px; font-size: 0.8em; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-dim); }
+
+    /* ── Forms ── */
+    label { display: block; font-size: 0.82em; color: var(--text-dim); margin-bottom: 2px; margin-top: 8px; }
+    input, textarea, select {
+      width: 100%; padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px;
+      background: var(--bg-dark); color: var(--text); font-size: 0.9em; outline: none;
+      transition: border-color 0.2s;
+    }
+    input:focus, textarea:focus, select:focus { border-color: var(--accent); }
+    select option { background: var(--bg-panel); }
+
+    /* ── Buttons ── */
+    button {
+      display: inline-flex; align-items: center; justify-content: center;
+      padding: 7px 14px; border: none; border-radius: 6px;
+      background: var(--accent); color: #fff; font-size: 0.85em; font-weight: 600;
+      cursor: pointer; transition: background 0.2s; white-space: nowrap;
+    }
+    button:hover    { background: var(--accent-dim); }
+    button:disabled { background: var(--grey); cursor: not-allowed; }
+    button.btn-grey { background: var(--grey); }
+    button.btn-grey:hover { background: #394060; }
+    button.btn-green { background: var(--green); color: #0f1117; }
+    button.btn-green:hover { background: #2fb87a; }
+
+    .btn-row { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+    .btn-row button { flex: 1; min-width: 80px; }
+
+    /* ── Project list ── */
+    .project-item { border: 1px solid var(--border); border-radius: 6px; margin-bottom: 6px; overflow: hidden; }
+    .project-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 8px 10px; background: var(--bg-hover); cursor: pointer;
+      user-select: none;
+    }
+    .project-header:hover { background: #333859; }
+    .project-name { font-size: 0.9em; font-weight: 600; color: var(--accent); }
+    .project-actions { display: flex; gap: 5px; }
+    .project-actions button { padding: 3px 9px; font-size: 0.75em; margin: 0; }
+    .project-chevron { font-size: 0.7em; color: var(--text-dim); margin-right: 6px; transition: transform 0.2s; }
+    .project-docs { display: none; padding: 8px 12px; background: var(--bg-section); border-top: 1px solid var(--border); }
+    .project-docs.open { display: block; }
+    .doc-item { font-size: 0.8em; color: var(--text-dim); padding: 3px 0; border-bottom: 1px solid var(--border); word-break: break-all; }
+    .doc-item:last-child { border-bottom: none; }
+    .doc-item a { color: var(--accent); text-decoration: none; }
+    .doc-item a:hover { text-decoration: underline; }
+    .no-docs { font-size: 0.8em; color: var(--grey); font-style: italic; }
+
+    /* ── Resizable divider ── */
+    .divider { width: 5px; background: var(--border); cursor: col-resize; flex-shrink: 0; transition: background 0.2s; }
+    .divider:hover, .divider.dragging { background: var(--accent); }
+
+    /* ── Right pane ── */
+    .right-pane { flex: 1; display: flex; flex-direction: column; padding: 16px; gap: 12px; overflow: hidden; background: var(--bg-dark); min-width: 300px; }
+    .chat-header { display: flex; align-items: center; gap: 14px; background: var(--bg-panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 16px; flex-shrink: 0; }
+    .chat-header h3 { margin: 0; font-size: 0.85em; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-dim); flex-shrink: 0; }
+    .chat-header select { flex: 1; max-width: 240px; margin: 0; }
+
+    .chat-container { flex: 1; display: flex; flex-direction: column; background: var(--bg-panel); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; min-height: 0; }
+    .chat-messages { flex: 1; padding: 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+    .message { max-width: 78%; padding: 10px 14px; border-radius: 10px; font-size: 0.92em; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+    .message.user { background: var(--accent); color: #fff; align-self: flex-end; border-bottom-right-radius: 3px; }
+    .message.assistant { background: var(--bg-section); color: var(--text); align-self: flex-start; border-bottom-left-radius: 3px; border: 1px solid var(--border); }
+
+    .chat-input-row { display: flex; gap: 8px; padding: 12px; border-top: 1px solid var(--border); background: var(--bg-panel); flex-shrink: 0; }
+    .chat-input-row textarea { flex: 1; resize: none; margin: 0; height: 60px; }
+    .chat-input-row button { width: 80px; height: 60px; font-size: 1em; border-radius: 8px; flex-shrink: 0; }
+
+    /* ── Status bar ── */
+    #statusBar { font-size: 0.8em; min-height: 28px; padding: 4px 10px; border-radius: 6px; display: flex; align-items: center; flex-shrink: 0; }
+    #statusBar.success { background: #1a3b2a; color: var(--green); border: 1px solid #2a6a45; }
+    #statusBar.error   { background: #3b1a1a; color: var(--red);   border: 1px solid #7a3030; }
+    #statusBar.info    { background: #1a2540; color: #7eb3ff;       border: 1px solid #2d4a80; }
+    #statusBar.hidden  { visibility: hidden; }
+
+    /* ── Modals ── */
+    .modal { display: none; position: fixed; z-index: 100; inset: 0; background: rgba(0,0,0,0.65); }
+    .modal-content { background: var(--bg-panel); border: 1px solid var(--border); border-radius: var(--radius); margin: 12% auto; padding: 24px; width: 90%; max-width: 460px; }
+    .modal-content h3 { margin-top: 0; color: var(--accent); }
+    .close { float: right; font-size: 1.4em; color: var(--text-dim); cursor: pointer; line-height: 1; }
+    .close:hover { color: var(--text); }
+
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
   </style>
 </head>
 <body>
-  <h1>RAG Agent UI</h1>
-  <p>Using endpoint <strong>/ingest</strong>, <strong>/upload</strong>, <strong>/query</strong>.</p>
+  <div class="container">
 
-  <h2>1) Ingest project</h2>
-  <label>Team <input id="team" value="analytics"/></label>
-  <label>Project <input id="project" value="sample"/></label>
-  <label>Local source folder path <input id="source" value=""/></label>
-  <label>Doc type <input id="doc_type" value="mixed"/></label>
-  <button onclick="doIngest()">Ingest</button>
+    <!-- ── Left Pane ── -->
+    <div class="left-pane" id="leftPane">
+      <div class="pane-header">⬡ RAG Agent</div>
 
-  <h2>2) Upload ad-hoc document</h2>
-  <label>Filename <input id="filename" value="doc.md"/></label>
-  <label>Content <textarea id="content" rows="4">Example note text for caching.</textarea></label>
-  <button onclick="doUpload()">Upload + Rebuild Index</button>
+      <div class="left-top">
+        <!-- Ingested Projects -->
+        <div class="section">
+          <h3>Ingested Projects</h3>
+          <div id="projectList"></div>
+          <div style="margin-top:8px">
+            <button onclick="loadProjects()" class="btn-grey" style="width:100%">↻ Refresh</button>
+          </div>
+        </div>
+      </div>
 
-  <h2>3) Query/Chat</h2>
-  <label>Query <textarea id="queryText" rows="2">How does add function work?</textarea></label>
-  <label>TopK <input id="topK" type="number" value="5"/></label>
-  <label>Use LLM <select id="useLLM"><option value="false" selected>false</option><option value="true">true</option></select></label>
-  <button onclick="doQuery()">Run Query</button>
+      <div class="left-bottom">
+        <!-- Project Actions -->
+        <div class="section" style="margin-bottom:0">
+          <h3>Project Actions</h3>
+          <label>Select Project</label>
+          <select id="actionProject"></select>
+          <div class="btn-row" style="margin-top:10px">
+            <button onclick="showCreateProjectDialog()">+ New</button>
+            <button onclick="showUploadDialog()" class="btn-grey">↑ Upload</button>
+          </div>
+          <div class="btn-row">
+            <button onclick="showAddWebUrlDialog()" class="btn-grey">🔗 Web URL</button>
+            <button onclick="showIngestGitHubDialog()" class="btn-grey">⎇ GitHub</button>
+          </div>
+        </div>
+      </div>
+    </div>
 
-  <h2>Response</h2>
-  <div id="output">-- responses appear here --</div>
+    <!-- ── Divider ── -->
+    <div class="divider" id="paneDivider"></div>
 
-  <script src="./app.js"></script>
+    <!-- ── Right Pane ── -->
+    <div class="right-pane" id="rightPane">
+      <div class="chat-header">
+        <h3>Chat</h3>
+        <select id="chatProject"><option value="all">All Projects</option></select>
+      </div>
+
+      <div id="statusBar" class="hidden"></div>
+
+      <div class="chat-container">
+        <div id="chatMessages" class="chat-messages">
+          <div class="message assistant">Hello! Select a project and ask me anything about your documents.</div>
+        </div>
+        <div class="chat-input-row">
+          <textarea id="chatInput" placeholder="Ask a question…" onkeydown="handleKeyPress(event)"></textarea>
+          <button onclick="sendMessage()" id="sendButton">Send</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Modals ── -->
+  <div id="createProjectModal" class="modal">
+    <div class="modal-content">
+      <span class="close" onclick="closeModal('createProjectModal')">&times;</span>
+      <h3>Create New Project</h3>
+      <label>Team</label><input id="newTeam" value="analytics"/>
+      <label>Project Name</label><input id="newProject" placeholder="my-project"/>
+      <div class="btn-row" style="margin-top:14px"><button onclick="doCreateProject()" class="btn-green">Create</button></div>
+    </div>
+  </div>
+
+  <div id="uploadModal" class="modal">
+    <div class="modal-content">
+      <span class="close" onclick="closeModal('uploadModal')">&times;</span>
+      <h3>Upload Document</h3>
+      <label>Filename</label><input id="uploadFilename" value="doc.md"/>
+      <label>Content</label><textarea id="uploadContent" rows="7" placeholder="Paste document content…"></textarea>
+      <div class="btn-row" style="margin-top:14px"><button onclick="doUploadDocument()" class="btn-green">Upload</button></div>
+    </div>
+  </div>
+
+  <div id="webUrlModal" class="modal">
+    <div class="modal-content">
+      <span class="close" onclick="closeModal('webUrlModal')">&times;</span>
+      <h3>Add Web URL</h3>
+      <label>URL</label><input id="webUrl" placeholder="https://example.com"/>
+      <div class="btn-row" style="margin-top:14px"><button onclick="doAddWebUrl()" class="btn-green">Add & Ingest</button></div>
+    </div>
+  </div>
+
+  <div id="githubModal" class="modal">
+    <div class="modal-content">
+      <span class="close" onclick="closeModal('githubModal')">&times;</span>
+      <h3>Ingest from GitHub</h3>
+      <label>GitHub Repository URL</label><input id="githubUrl" placeholder="https://github.com/user/repo"/>
+      <div class="btn-row" style="margin-top:14px"><button onclick="doIngestGitHubModal()" class="btn-green">Ingest</button></div>
+    </div>
+  </div>
+
+  <div id="renameModal" class="modal">
+    <div class="modal-content">
+      <span class="close" onclick="closeModal('renameModal')">&times;</span>
+      <h3>Rename Project</h3>
+      <p id="renameCurrentLabel" style="color:var(--text-dim);font-size:0.85em;margin-top:0"></p>
+      <label>New Name</label><input id="renameNewName" placeholder="new-project-name"/>
+      <div class="btn-row" style="margin-top:14px"><button onclick="doRenameProject()" class="btn-green">Rename</button></div>
+    </div>
+  </div>
+
+  <script src="/static/app.js?v=6"></script>
 </body>
 </html>

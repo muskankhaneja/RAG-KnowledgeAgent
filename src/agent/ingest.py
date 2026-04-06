@@ -27,9 +27,21 @@ def _compute_fallback_embeddings(texts, dim=384):
 
     vec = TfidfVectorizer(max_features=5000)
     X = vec.fit_transform(texts)
-    n_comp = min(dim, X.shape[1])
-    if n_comp <= 0:
+    if X.shape[0] == 0 or X.shape[1] == 0:
         return np.zeros((len(texts), dim), dtype=np.float32)
+
+    Xdense = X.toarray().astype(np.float32)
+    if Xdense.shape[0] == 1 or Xdense.shape[1] == 1:
+        Xpad = np.zeros((Xdense.shape[0], dim), dtype=np.float32)
+        Xpad[:, : Xdense.shape[1]] = Xdense
+        return Xpad
+
+    n_comp = min(dim, X.shape[1], X.shape[0] - 1)
+    if n_comp <= 0:
+        Xpad = np.zeros((Xdense.shape[0], dim), dtype=np.float32)
+        Xpad[:, : Xdense.shape[1]] = Xdense
+        return Xpad
+
     svd = TruncatedSVD(n_components=n_comp)
     Xred = svd.fit_transform(X)
     if Xred.ndim != 2:

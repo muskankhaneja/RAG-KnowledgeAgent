@@ -12,7 +12,8 @@ Quick start
 pip install -r requirements.txt
 ```
 
-3. (Optional) Set `OPENAI_API_KEY` in your environment for LLM responses.
+3. (Optional) Set `HF_ACCESS_TOKEN` in your environment for LLM responses.
+   - Optionally set `HF_MODEL` to a Hugging Face model name, e.g. `google/flan-t5-large`.
 
 4. Ingest a project directory (each project is a folder with code/docs), or a GitHub repo URL:
 
@@ -44,4 +45,4 @@ Design notes
 
 - Each ingested project produces a vectorstore under `vectorstores/<project>`.
 - The retriever can search per-project or across all projects.
-- LLM calls use OpenAI if `OPENAI_API_KEY` is provided; otherwise the API returns retrieved documents only.
+- LLM calls use Hugging Face inference if `HF_ACCESS_TOKEN` is provided; otherwise the API returns retrieved documents only.

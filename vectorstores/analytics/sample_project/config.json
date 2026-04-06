@@ -1,0 +1,9 @@
+{
+  "team": "analytics",
+  "project": "sample_project",
+  "model": "all-MiniLM-L6-v2",
+  "dim": 384,
+  "count": 1,
+  "source": "data\\analytics\\sample_project",
+  "doc_type": "uploaded"
+}
