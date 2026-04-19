@@ -169,18 +169,26 @@ def get_projects():
 
 @app.post("/query")
 def api_query(p: QueryPayload):
-    results = query(p.team, p.project, p.query, p.top_k)
+    top_k = max(1, min(int(p.top_k or 5), 5))
+    results = query(p.team, p.project, p.query, top_k)
     if p.use_llm:
         api_key = os.environ.get("HF_ACCESS_TOKEN")
         if not api_key:
             # return raw docs if no key
             return {"retrieved": results, "llm": None, "note": "HF_ACCESS_TOKEN not set"}
         # build context
+        max_projects = int(os.environ.get("MAX_CONTEXT_PROJECTS", "3"))
+        max_hits_per_project = int(os.environ.get("MAX_CONTEXT_HITS_PER_PROJECT", "2"))
+        max_context_chars = int(os.environ.get("MAX_CONTEXT_CHARS", "6000"))
         context_texts = []
-        for proj, hits in results.items():
-            for h in hits:
+        for proj_idx, (proj, hits) in enumerate(results.items()):
+            if proj_idx >= max_projects:
+                break
+            for h in hits[:max_hits_per_project]:
                 context_texts.append(f"Project: {proj}\nSource: {h.get('source')}\nText: {h.get('text')}\nScore: {h.get('score')}\n---\n")
         context = "\n".join(context_texts)
+        if len(context) > max_context_chars:
+            context = context[:max_context_chars]
         system = "You are an assistant that uses the provided context to answer the user's question. If context contradicts itself, prefer the most relevant extracts. Keep answers concise and actionable."
         prompt = f"Context:\n{context}\nUser question:\n{p.query}\nProvide an answer, cite sources if helpful."
         model = os.environ.get("HF_MODEL", "google/flan-t5-large")
@@ -202,8 +210,8 @@ def main():
     p_ingest.add_argument("--source", required=True)
 
     p_serve = sub.add_parser("serve")
-    p_serve.add_argument("--host", default="127.0.0.1")
-    p_serve.add_argument("--port", type=int, default=8000)
+    p_serve.add_argument("--host", default="0.0.0.0")
+    p_serve.add_argument("--port", type=int, default=int(os.environ.get("PORT", 8000)))
 
     args = parser.parse_args()
     if args.cmd == "ingest":

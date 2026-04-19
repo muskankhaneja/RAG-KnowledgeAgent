@@ -17,13 +17,15 @@ def call_hf_chat(system: str, user_prompt: str, access_token: Optional[str] = No
         hf_model = model
 
     try:
-        client = InferenceClient(model=hf_model, token=access_token)
+        timeout_s = float(os.environ.get("HF_TIMEOUT_SECONDS", "40"))
+        max_tokens = int(os.environ.get("HF_MAX_TOKENS", "256"))
+        client = InferenceClient(model=hf_model, token=access_token, timeout=timeout_s)
         response = client.chat_completion(
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": user_prompt},
             ],
-            max_tokens=512,
+            max_tokens=max_tokens,
             temperature=0.7,
         )
         return response.choices[0].message.content.strip()

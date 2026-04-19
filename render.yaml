@@ -11,3 +11,13 @@ services:
         sync: false          # set this manually in the Render dashboard
       - key: HF_MODEL
         value: google/flan-t5-large
+      - key: HF_TIMEOUT_SECONDS
+        value: "40"
+      - key: HF_MAX_TOKENS
+        value: "256"
+      - key: MAX_CONTEXT_PROJECTS
+        value: "3"
+      - key: MAX_CONTEXT_HITS_PER_PROJECT
+        value: "2"
+      - key: MAX_CONTEXT_CHARS
+        value: "6000"
