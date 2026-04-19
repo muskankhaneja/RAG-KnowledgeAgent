@@ -10,6 +10,8 @@ except Exception:
     SentenceTransformer = None
     _HAS_ST = False
 
+_EMBED_MODEL = None
+
 try:
     import faiss
 except Exception:
@@ -100,13 +102,23 @@ def load_index(project: str, team: Optional[str] = None, persist_dir: str = "vec
     return index, metadata
 
 
+def _get_embedder(model_name: str):
+    """Load and cache one embedding model per process to avoid OOM churn."""
+    global _EMBED_MODEL
+    disable_local = os.environ.get("DISABLE_LOCAL_EMBEDDINGS", "").lower() in {"1", "true", "yes"}
+    if disable_local or not _HAS_ST:
+        return None
+    if _EMBED_MODEL is None:
+        _EMBED_MODEL = SentenceTransformer(model_name)
+    return _EMBED_MODEL
+
+
 def query(team: Optional[str], project: Optional[str], query_text: str, top_k: int = 5, persist_dir: str = "vectorstores", model_name: str = "all-MiniLM-L6-v2") -> Dict:
     model = None
-    if _HAS_ST:
-        try:
-            model = SentenceTransformer(model_name)
-        except Exception:
-            model = None
+    try:
+        model = _get_embedder(model_name)
+    except Exception:
+        model = None
     if model is not None:
         q_emb = model.encode([query_text], convert_to_numpy=True)
     else:
