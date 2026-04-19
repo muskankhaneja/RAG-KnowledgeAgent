@@ -17,8 +17,6 @@ services:
         value: "256"
       - key: DISABLE_LOCAL_EMBEDDINGS
         value: "true"
-      - key: DISABLE_VECTOR_INDEX
-        value: "true"
       - key: MAX_CONTEXT_PROJECTS
         value: "3"
       - key: MAX_CONTEXT_HITS_PER_PROJECT
