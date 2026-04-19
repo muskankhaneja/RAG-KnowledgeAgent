@@ -3,7 +3,6 @@ import pickle
 from typing import List, Dict, Optional
 
 import numpy as np
-try:
 _EMBED_MODEL = None
 
 try:
