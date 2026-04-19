@@ -1,3 +1,12 @@
+---
+title: RAG Agent
+emoji: "🤖"
+colorFrom: blue
+colorTo: gray
+sdk: docker
+app_port: 7860
+---
+
 # RAG-Agent (Team Assistant)
 
 Minimal end-to-end Retrieval-Augmented-Generation (RAG) agent scaffold.
