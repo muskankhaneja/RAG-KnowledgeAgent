@@ -4,12 +4,6 @@ from typing import List, Dict, Optional
 
 import numpy as np
 try:
-    from sentence_transformers import SentenceTransformer
-    _HAS_ST = True
-except Exception:
-    SentenceTransformer = None
-    _HAS_ST = False
-
 _EMBED_MODEL = None
 
 try:
@@ -17,6 +11,7 @@ try:
 except Exception:
     faiss = None
 
+_HAS_ST = None
 
 def _compute_fallback_embeddings(texts, dim=384):
     from sklearn.feature_extraction.text import TfidfVectorizer
@@ -104,12 +99,23 @@ def load_index(project: str, team: Optional[str] = None, persist_dir: str = "vec
 
 def _get_embedder(model_name: str):
     """Load and cache one embedding model per process to avoid OOM churn."""
-    global _EMBED_MODEL
+    global _EMBED_MODEL, _HAS_ST
     disable_local = os.environ.get("DISABLE_LOCAL_EMBEDDINGS", "").lower() in {"1", "true", "yes"}
-    if disable_local or not _HAS_ST:
+    if disable_local:
         return None
+
+    if _HAS_ST is None:
+        try:
+            from sentence_transformers import SentenceTransformer  # type: ignore
+            _HAS_ST = SentenceTransformer
+        except Exception:
+            _HAS_ST = False
+
+    if not _HAS_ST:
+        return None
+
     if _EMBED_MODEL is None:
-        _EMBED_MODEL = SentenceTransformer(model_name)
+        _EMBED_MODEL = _HAS_ST(model_name)
     return _EMBED_MODEL
 
 
