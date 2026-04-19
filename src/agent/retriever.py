@@ -85,6 +85,10 @@ def list_projects(persist_dir: str = "vectorstores") -> Dict[str, List[str]]:
 
 
 def load_index(project: str, team: Optional[str] = None, persist_dir: str = "vectorstores"):
+    disable_vector_index = os.environ.get("DISABLE_VECTOR_INDEX", "").lower() in {"1", "true", "yes"}
+    if disable_vector_index:
+        return None, None
+    
     index_path, meta_path, _ = _index_paths(project, team, persist_dir)
     if not os.path.exists(index_path):
         raise FileNotFoundError("Index not found for project: %s" % project)
@@ -180,6 +184,8 @@ def query(team: Optional[str], project: Optional[str], query_text: str, top_k: i
         try:
             index, meta = load_index(p, t, persist_dir)
         except Exception:
+            continue
+        if index is None or meta is None:
             continue
         D, I = index.search(q_emb, top_k)
         hits = []
