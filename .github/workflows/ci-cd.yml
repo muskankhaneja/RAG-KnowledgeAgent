@@ -15,7 +15,7 @@ jobs:
       MOCK_LLM: "1"           # no real HF calls during tests
       HF_ACCESS_TOKEN: "mock"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: actions/setup-python@v5
         with:
@@ -35,7 +35,7 @@ jobs:
     needs: test                 # only deploy if tests pass
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0        # full history so force-push works cleanly
 
