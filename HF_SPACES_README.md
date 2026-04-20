@@ -1,23 +1,29 @@
 ---
-title: RAG Agent
-emoji: 🤖
-colorFrom: blue
+title: RAG Knowledge Agent
+emoji: 🧠
+colorFrom: orange
 colorTo: gray
 sdk: docker
 port: 7860
+pinned: false
 ---
 
-# RAG Agent
+# RAG Knowledge Agent — Personal Knowledge Base
 
-A retrieval-augmented generation (RAG) AI agent that leverages vector embeddings, semantic search, and LLM prompt orchestration for context-aware intelligent response generation.
+A personal, browser-first Retrieval-Augmented Generation system.
+All your document data lives in your **browser** (IndexedDB) — the server is 100% stateless.
 
 ## Features
+- 📁 Ingest documents (file upload, paste text, or GitHub repo URL)
+- 🔍 BM25 retrieval running entirely in-browser
+- 🤖 LLM-powered answers via HuggingFace Inference API
+- 💾 All data stored in IndexedDB — no server-side storage
+- 📤 Export / import your full knowledge base as JSON
+- 🖼️ Resizable chat, collapsible sidebar
 
-- 📄 **Document Ingestion**: Upload documents, ingest from GitHub repos, or add web URLs
-- 🔍 **Semantic Search**: Uses FAISS + sentence transformers for fast vector-based retrieval
-- 🧠 **LLM Integration**: Powered by Hugging Face inference API (supports any HF model)
-- 💬 **Interactive Chat**: Web UI for querying documents with LLM-generated answers
-- 🏗️ **Multi-Project**: Organize documents into teams and projects
+## Setup (HuggingFace Spaces)
+Add `HF_ACCESS_TOKEN` as a Space **secret** with the **"Make calls to Inference Providers"** permission enabled.
+
 
 ## Setup
 

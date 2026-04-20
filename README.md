@@ -1,3 +1,13 @@
+---
+title: RAG Knowledge Agent
+emoji: 🧠
+colorFrom: orange
+colorTo: gray
+sdk: docker
+port: 7860
+pinned: false
+---
+
 # RAG Agent — Personal Knowledge Base
 
 A personal, browser-first Retrieval-Augmented Generation (RAG) system. All your document data lives in your browser (IndexedDB); the server is **100% stateless** — it only receives context and a query, then returns an LLM-generated answer. No database, no user accounts, no server-side storage.
