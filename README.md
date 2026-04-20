@@ -1,7 +1,7 @@
 ---
 title: RAG Knowledge Agent
 emoji: 🧠
-colorFrom: orange
+colorFrom: red
 colorTo: gray
 sdk: docker
 port: 7860
