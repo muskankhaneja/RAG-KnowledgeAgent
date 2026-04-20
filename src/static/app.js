@@ -1,325 +1,543 @@
-const baseUrl = window.location.origin;
-console.log('RAG Agent UI baseUrl:', baseUrl);
+﻿// ─────────────────────────────────────────────────────────────────────────────
+// RAG Agent – local-first personal knowledge base
+// All chunks + indexes live in the browser (IndexedDB).
+// The server is stateless: it only receives context + query and returns an answer.
+// ─────────────────────────────────────────────────────────────────────────────
 
-// Global state
-let currentProjects = {};
-let selectedProject = null;
+const baseUrl = window.API_BASE_URL || window.location.origin;
 
-// Initialize the app
-document.addEventListener('DOMContentLoaded', function() {
-  loadProjects();
-  setupChat();
-  setupResizablePanes();
-});
+// ── Global state ──────────────────────────────────────────────────────────────
+let collections = [];
+let selectedCollection = null;
+let bm25Index = null;
+let bm25Chunks = [];
+let chatHistory = [];
 
-function setupResizablePanes() {
-  const divider = document.getElementById('paneDivider');
-  const leftPane = document.getElementById('leftPane');
-  if (!divider || !leftPane) return;
+// ── IndexedDB layer ───────────────────────────────────────────────────────────
+const DB_NAME = 'rag-kb';
+const DB_VERSION = 1;
+let _db = null;
 
-  let dragging = false;
-  let startX = 0;
-  let startWidth = 0;
-
-  divider.addEventListener('mousedown', function(e) {
-    dragging = true;
-    startX = e.clientX;
-    startWidth = leftPane.getBoundingClientRect().width;
-    divider.classList.add('dragging');
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-    e.preventDefault();
-  });
-
-  document.addEventListener('mousemove', function(e) {
-    if (!dragging) return;
-    const delta = e.clientX - startX;
-    const newWidth = Math.max(200, Math.min(600, startWidth + delta));
-    leftPane.style.width = newWidth + 'px';
-    leftPane.style.minWidth = newWidth + 'px';
-  });
-
-  document.addEventListener('mouseup', function() {
-    if (!dragging) return;
-    dragging = false;
-    divider.classList.remove('dragging');
-    document.body.style.cursor = '';
-    document.body.style.userSelect = '';
+function openDB() {
+  if (_db) return Promise.resolve(_db);
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = (e) => {
+      const d = e.target.result;
+      if (!d.objectStoreNames.contains('collections')) {
+        d.createObjectStore('collections', { keyPath: 'id' });
+      }
+      if (!d.objectStoreNames.contains('chunks')) {
+        const s = d.createObjectStore('chunks', { keyPath: 'id' });
+        s.createIndex('collection', 'collection', { unique: false });
+        s.createIndex('filename', 'filename', { unique: false });
+      }
+    };
+    req.onsuccess = (e) => { _db = e.target.result; resolve(_db); };
+    req.onerror  = (e) => reject(e.target.error);
   });
 }
 
-// Load and display ingested projects
-async function loadProjects() {
-  try {
-    const response = await fetch(`${baseUrl}/projects`);
-    const data = await response.json();
-    currentProjects = data.projects || {};
+async function dbPut(store, value) {
+  const d = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = d.transaction(store, 'readwrite');
+    tx.objectStore(store).put(value).onsuccess = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
 
-    updateProjectLists();
-    showStatus('Projects loaded successfully', 'success');
-  } catch (error) {
-    console.error('Error loading projects:', error);
-    showStatus('Error loading projects: ' + error.message, 'error');
+async function dbGetAll(store) {
+  const d = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = d.transaction(store, 'readonly');
+    const req = tx.objectStore(store).getAll();
+    req.onsuccess = () => resolve(req.result);
+    req.onerror  = () => reject(req.error);
+  });
+}
+
+async function dbGetByIndex(store, indexName, value) {
+  const d = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = d.transaction(store, 'readonly');
+    const req = tx.objectStore(store).index(indexName).getAll(value);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror  = () => reject(req.error);
+  });
+}
+
+async function dbDelete(store, key) {
+  const d = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = d.transaction(store, 'readwrite');
+    tx.objectStore(store).delete(key).onsuccess = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+async function dbDeleteByIndex(store, indexName, value) {
+  const d = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = d.transaction(store, 'readwrite');
+    const s = tx.objectStore(store).index(indexName);
+    const req = s.openCursor(IDBKeyRange.only(value));
+    req.onsuccess = (e) => {
+      const cursor = e.target.result;
+      if (cursor) { cursor.delete(); cursor.continue(); }
+      else resolve();
+    };
+    req.onerror = () => reject(req.error);
+  });
+}
+
+// ── BM25 ──────────────────────────────────────────────────────────────────────
+class BM25 {
+  constructor(k1 = 1.5, b = 0.75) {
+    this.k1 = k1; this.b = b;
+    this.docs = []; this.idf = {}; this.avgdl = 0; this.N = 0;
+  }
+
+  tokenize(text) {
+    return text.toLowerCase().replace(/[^\w\s]/g, ' ').split(/\s+/).filter(t => t.length > 1);
+  }
+
+  build(docs) {
+    this.docs = docs.map(d => ({ id: d.id, tokens: this.tokenize(d.text) }));
+    this.N = this.docs.length;
+    if (!this.N) return;
+    this.avgdl = this.docs.reduce((s, d) => s + d.tokens.length, 0) / this.N;
+    const df = {};
+    for (const doc of this.docs) {
+      const seen = new Set();
+      for (const t of doc.tokens) {
+        if (!seen.has(t)) { df[t] = (df[t] || 0) + 1; seen.add(t); }
+      }
+    }
+    this.idf = {};
+    for (const [term, freq] of Object.entries(df)) {
+      this.idf[term] = Math.log((this.N - freq + 0.5) / (freq + 0.5) + 1);
+    }
+  }
+
+  search(query, topK = 20) {
+    if (!this.N) return [];
+    const qTokens = this.tokenize(query);
+    const scores = new Map();
+    for (const doc of this.docs) {
+      const dl = doc.tokens.length;
+      const tf = {};
+      for (const t of doc.tokens) tf[t] = (tf[t] || 0) + 1;
+      let score = 0;
+      for (const t of qTokens) {
+        if (!this.idf[t]) continue;
+        const f = tf[t] || 0;
+        score += this.idf[t] * (f * (this.k1 + 1)) / (f + this.k1 * (1 - this.b + this.b * dl / this.avgdl));
+      }
+      if (score > 0) scores.set(doc.id, score);
+    }
+    return [...scores.entries()].sort((a, b) => b[1] - a[1]).slice(0, topK).map(([id, score]) => ({ id, score }));
   }
 }
 
-// Update project dropdowns and lists
-function updateProjectLists() {
-  const projectList = document.getElementById('projectList');
-  const actionProject = document.getElementById('actionProject');
-  const chatProject = document.getElementById('chatProject');
+// ── Text processing ───────────────────────────────────────────────────────────
+function chunkText(text, maxWords = 200, overlap = 40) {
+  const words = text.split(/\s+/);
+  const chunks = [];
+  const step = maxWords - overlap;
+  for (let i = 0; i < words.length; i += step) {
+    const chunk = words.slice(i, i + maxWords).join(' ');
+    if (chunk.trim()) chunks.push(chunk);
+    if (i + maxWords >= words.length) break;
+  }
+  return chunks;
+}
 
-  // Clear existing options
-  projectList.innerHTML = '';
-  actionProject.innerHTML = '<option value="">Select project...</option>';
-  chatProject.innerHTML = '<option value="all">All Projects</option>';
+function estimateTokens(chunks) {
+  return chunks.reduce((s, c) => s + Math.ceil(c.text.length / 4), 0);
+}
 
-  // Add projects to lists
-  for (const [team, projects] of Object.entries(currentProjects)) {
-    projects.forEach(project => {
-      // Project tile with expand/collapse
-      const item = document.createElement('div');
-      item.className = 'project-item';
-      item.innerHTML = `
-        <div class="project-header" onclick="toggleProjectDocs(this, '${team}', '${project}')">
-          <span class="project-chevron">▶</span>
-          <span class="project-name">${team}/${project}</span>
-          <div class="project-actions" onclick="event.stopPropagation()">
-            <button title="Chat with this project" onclick="selectProject('${team}', '${project}')">💬</button>
-            <button class="btn-grey" title="Rename project" onclick="showRenameDialog('${team}', '${project}')">✏️</button>
-          </div>
-        </div>
-        <div class="project-docs" id="docs-${team}-${project}">
-          <span class="no-docs">Click to load documents…</span>
-        </div>
-      `;
-      projectList.appendChild(item);
+function uid() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+}
 
-      // Dropdown options
-      const option = document.createElement('option');
-      option.value = `${team}/${project}`;
-      option.textContent = `${team}/${project}`;
-      actionProject.appendChild(option.cloneNode(true));
-      chatProject.appendChild(option.cloneNode(true));
-    });
+// ── BM25 index rebuild ────────────────────────────────────────────────────────
+async function rebuildBM25(collectionId) {
+  const allChunks = collectionId
+    ? await dbGetByIndex('chunks', 'collection', collectionId)
+    : await dbGetAll('chunks');
+
+  bm25Chunks = allChunks;
+  const docs = allChunks.map(c => ({
+    id: c.id,
+    text: c.text + (c.questions && c.questions.length ? ' ' + c.questions.join(' ') : ''),
+  }));
+  bm25Index = new BM25();
+  bm25Index.build(docs);
+}
+
+// ── Ingest ────────────────────────────────────────────────────────────────────
+async function ingestText(text, filename, collectionId, enhancedIndexing) {
+  const rawChunks = chunkText(text);
+  const newChunks = rawChunks.map((t, i) => ({
+    id: uid(),
+    text: t,
+    filename,
+    source: filename,
+    collection: collectionId,
+    chunkIndex: i,
+    questions: [],
+    createdAt: Date.now(),
+  }));
+
+  for (const chunk of newChunks) await dbPut('chunks', chunk);
+  await rebuildBM25();
+  showStatus('Indexed ' + newChunks.length + ' chunks from "' + filename + '"', 'success');
+
+  if (enhancedIndexing) {
+    showStatus('Generating search questions for "' + filename + '"...', 'info');
+    try {
+      const payload = { chunks: newChunks.map(c => ({ id: c.id, text: c.text, source: c.source })) };
+      const res = await fetch(baseUrl + '/ingest/questions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        for (const item of (data.results || [])) {
+          const chunk = newChunks.find(c => c.id === item.id);
+          if (chunk) { chunk.questions = item.questions; await dbPut('chunks', chunk); }
+        }
+        await rebuildBM25();
+        showStatus('Enhanced indexing done for "' + filename + '"', 'success');
+      }
+    } catch (e) {
+      showStatus('Enhanced indexing failed (BM25 still active): ' + e.message, 'info');
+    }
+  }
+
+  return newChunks.length;
+}
+
+// ── Retrieval ─────────────────────────────────────────────────────────────────
+async function retrieve(query, collectionId) {
+  await rebuildBM25(collectionId || undefined);
+  const totalTokens = estimateTokens(bm25Chunks);
+
+  if (totalTokens < 60000 && bm25Chunks.length < 500) {
+    return { mode: 'full', chunks: bm25Chunks };
+  }
+
+  const hits = bm25Index.search(query, 20);
+  const chunkMap = new Map(bm25Chunks.map(c => [c.id, c]));
+  const candidates = hits.map(h => chunkMap.get(h.id)).filter(Boolean);
+  return { mode: 'bm25', chunks: candidates };
+}
+
+// ── Collections management ────────────────────────────────────────────────────
+async function loadCollections() {
+  collections = await dbGetAll('collections');
+  await renderCollections();
+  updateChatSelector();
+}
+
+async function createCollection(name) {
+  const col = { id: uid(), name: name.trim(), createdAt: Date.now() };
+  await dbPut('collections', col);
+  await loadCollections();
+  return col;
+}
+
+async function deleteCollection(id) {
+  await dbDeleteByIndex('chunks', 'collection', id);
+  await dbDelete('collections', id);
+  if (selectedCollection === id) selectedCollection = null;
+  await loadCollections();
+  await rebuildBM25();
+}
+
+async function deleteDocument(filename, collectionId) {
+  const chunks = await dbGetByIndex('chunks', 'collection', collectionId);
+  const toDelete = chunks.filter(c => c.filename === filename);
+  for (const c of toDelete) await dbDelete('chunks', c.id);
+  await rebuildBM25();
+  await renderCollections();
+  showStatus('Removed "' + filename + '"', 'success');
+}
+
+// ── Render left pane ──────────────────────────────────────────────────────────
+async function renderCollections() {
+  const list = document.getElementById('collectionList');
+  if (!list) return;
+  list.innerHTML = '';
+
+  if (!collections.length) {
+    list.innerHTML = '<div class="no-docs" style="padding:10px 4px">No collections yet. Create one to get started.</div>';
+    return;
+  }
+
+  for (const col of collections) {
+    const chunks = await dbGetByIndex('chunks', 'collection', col.id);
+    const filenames = [...new Set(chunks.map(c => c.filename))];
+
+    const item = document.createElement('div');
+    item.className = 'project-item';
+    item.innerHTML =
+      '<div class="project-header" onclick="toggleCollectionDocs(this,\'' + col.id + '\')">' +
+        '<span class="project-chevron">&#9658;</span>' +
+        '<span class="project-name">' + escapeHtml(col.name) + '</span>' +
+        '<div class="project-actions" onclick="event.stopPropagation()">' +
+          '<button title="Chat with this collection" onclick="selectChatCollection(\'' + col.id + '\')">&#128172;</button>' +
+          '<button class="btn-grey" title="Delete collection" onclick="confirmDeleteCollection(\'' + col.id + '\',\'' + escapeHtml(col.name) + '\')">&#128465;</button>' +
+        '</div>' +
+      '</div>' +
+      '<div class="project-docs" id="col-docs-' + col.id + '">' +
+        (filenames.length === 0
+          ? '<span class="no-docs">No documents yet.</span>'
+          : filenames.map(f =>
+              '<div class="doc-item" style="display:flex;justify-content:space-between;align-items:center">' +
+                '<span>&#128196; ' + escapeHtml(f) + '</span>' +
+                '<button class="btn-grey" style="padding:2px 7px;font-size:0.7em;flex-shrink:0;margin-left:6px"' +
+                  ' onclick="confirmDeleteDocument(\'' + escapeHtml(f) + '\',\'' + col.id + '\')">&#10005;</button>' +
+              '</div>'
+            ).join('')) +
+      '</div>';
+    list.appendChild(item);
   }
 }
 
-// Select a project for chat
-function selectProject(team, project) {
-  selectedProject = { team, project };
-  document.getElementById('chatProject').value = `${team}/${project}`;
+function toggleCollectionDocs(headerEl, colId) {
+  const docsEl = document.getElementById('col-docs-' + colId);
+  const chevron = headerEl.querySelector('.project-chevron');
+  const isOpen = docsEl.classList.contains('open');
+  docsEl.classList.toggle('open', !isOpen);
+  chevron.style.transform = isOpen ? '' : 'rotate(90deg)';
+}
 
-  // Clear chat and show welcome message
+function updateChatSelector() {
+  const sel = document.getElementById('chatCollection');
+  if (!sel) return;
+  const current = sel.value;
+  sel.innerHTML = '<option value="all">All Collections</option>';
+  for (const col of collections) {
+    const opt = document.createElement('option');
+    opt.value = col.id;
+    opt.textContent = col.name;
+    if (col.id === current) opt.selected = true;
+    sel.appendChild(opt);
+  }
+}
+
+function selectChatCollection(colId) {
+  selectedCollection = colId;
+  const sel = document.getElementById('chatCollection');
+  if (sel) sel.value = colId;
+  const col = collections.find(c => c.id === colId);
+  chatHistory = [];
   document.getElementById('chatMessages').innerHTML = '';
-  addMessage('assistant', `Ready to chat about ${team}/${project}. Ask me anything about the documents!`);
-
-  showStatus(`Selected project: ${team}/${project}`, 'info');
+  addMessage('assistant', 'Ready. Ask me anything about "' + (col ? col.name : 'this collection') + '".');
+  showStatus('Switched to "' + (col ? col.name : colId) + '"', 'info');
 }
 
-// Ingest from local path
-async function doIngest() {
-  const team = document.getElementById('team').value;
-  const project = document.getElementById('project').value;
-  const source = document.getElementById('source').value;
-
-  if (!project || !source) {
-    showStatus('Please provide project name and source path', 'error');
-    return;
+function confirmDeleteCollection(id, name) {
+  if (confirm('Delete collection "' + name + '" and all its documents? This cannot be undone.')) {
+    deleteCollection(id);
   }
+}
 
-  const body = { team, project, source, doc_type: 'mixed' };
+function confirmDeleteDocument(filename, colId) {
+  if (confirm('Remove "' + filename + '" from this collection?')) {
+    deleteDocument(filename, colId);
+  }
+}
 
-  showStatus('Ingesting project...', 'info');
-  disableButtons(true);
+// ── Export / Import ───────────────────────────────────────────────────────────
+async function exportKB() {
+  const allCollections = await dbGetAll('collections');
+  const allChunks = await dbGetAll('chunks');
+  const blob = new Blob(
+    [JSON.stringify({ version: 1, collections: allCollections, chunks: allChunks }, null, 2)],
+    { type: 'application/json' }
+  );
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'knowledge-base-' + new Date().toISOString().slice(0, 10) + '.json';
+  a.click();
+  showStatus('Knowledge base exported', 'success');
+}
 
+async function importKB(file) {
   try {
-    const response = await fetch(`${baseUrl}/ingest`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
-
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`${response.status}: ${error}`);
-    }
-
-    const result = await response.json();
-    showStatus(`Project ingested successfully: ${result.count} documents`, 'success');
-    loadProjects(); // Refresh project list
-
-  } catch (error) {
-    showStatus('Ingestion failed: ' + error.message, 'error');
-  } finally {
-    disableButtons(false);
+    const text = await file.text();
+    const data = JSON.parse(text);
+    if (!data.collections || !data.chunks) throw new Error('Invalid export file');
+    for (const col of data.collections) await dbPut('collections', col);
+    for (const chunk of data.chunks) await dbPut('chunks', chunk);
+    await loadCollections();
+    await rebuildBM25();
+    showStatus('Imported ' + data.chunks.length + ' chunks across ' + data.collections.length + ' collections', 'success');
+  } catch (e) {
+    showStatus('Import failed: ' + e.message, 'error');
   }
 }
 
-// Ingest from GitHub
+function triggerImport() {
+  const input = document.createElement('input');
+  input.type = 'file'; input.accept = '.json';
+  input.onchange = (e) => { if (e.target.files[0]) importKB(e.target.files[0]); };
+  input.click();
+}
+
+// ── GitHub ingest ─────────────────────────────────────────────────────────────
+function showGitHubModal() {
+  if (!collections.length) { showStatus('Create a collection first', 'error'); return; }
+  const sel = document.getElementById('githubCollection');
+  sel.innerHTML = '';
+  for (const col of collections) {
+    const opt = document.createElement('option');
+    opt.value = col.id; opt.textContent = col.name;
+    if (col.id === selectedCollection) opt.selected = true;
+    sel.appendChild(opt);
+  }
+  document.getElementById('githubUrl').value = '';
+  document.getElementById('githubStatus').textContent = '';
+  document.getElementById('githubEnhanced').checked = false;
+  showModal('githubModal');
+}
+
 async function doIngestGitHub() {
-  const team = document.getElementById('team').value;
-  const project = document.getElementById('project').value;
-  const githubUrl = document.getElementById('githubUrl').value;
+  const colId = document.getElementById('githubCollection').value;
+  const url = document.getElementById('githubUrl').value.trim();
+  const enhanced = true;
+  const statusEl = document.getElementById('githubStatus');
+  const btn = document.getElementById('githubIngestBtn');
 
-  if (!project || !githubUrl) {
-    showStatus('Please provide project name and GitHub URL', 'error');
-    return;
-  }
+  if (!url) { showStatus('Please enter a repository URL', 'error'); return; }
+  if (!colId) { showStatus('Select a collection', 'error'); return; }
 
-  const body = { team, project, source: githubUrl, doc_type: 'mixed' };
-
-  showStatus('Cloning and ingesting from GitHub...', 'info');
-  disableButtons(true);
-
-  try {
-    const response = await fetch(`${baseUrl}/ingest`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
-
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`${response.status}: ${error}`);
-    }
-
-    const result = await response.json();
-    showStatus(`GitHub project ingested successfully: ${result.count} documents`, 'success');
-    loadProjects(); // Refresh project list
-
-  } catch (error) {
-    showStatus('GitHub ingestion failed: ' + error.message, 'error');
-  } finally {
-    disableButtons(false);
-  }
-}
-
-// Upload document
-async function doUpload() {
-  const projectPath = document.getElementById('uploadProject').value;
-  const filename = document.getElementById('filename').value;
-  const content = document.getElementById('content').value;
-
-  if (!projectPath || !filename || !content) {
-    showStatus('Please select project, provide filename, and content', 'error');
-    return;
-  }
-
-  const [team, project] = projectPath.split('/');
-  const body = { team, project, filename, content, doc_type: 'uploaded' };
-
-  showStatus('Uploading document...', 'info');
-  disableButtons(true);
+  btn.disabled = true;
+  btn.textContent = 'Cloning...';
+  statusEl.textContent = 'Cloning repository — this may take a moment...';
 
   try {
-    const response = await fetch(`${baseUrl}/upload`, {
+    const res = await fetch(baseUrl + '/fetch/github', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
+      body: JSON.stringify({ url }),
     });
 
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`${response.status}: ${error}`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || res.statusText);
     }
 
-    const result = await response.json();
-    showStatus(`Document uploaded and reindexed: ${filename}`, 'success');
+    const data = await res.json();
+    const files = data.files || [];
+    statusEl.textContent = 'Indexing ' + files.length + ' files...';
+    btn.textContent = 'Indexing...';
 
-  } catch (error) {
-    showStatus('Upload failed: ' + error.message, 'error');
+    let totalChunks = 0;
+    for (const file of files) {
+      totalChunks += await ingestText(file.text, file.filename, colId, false);
+    }
+
+    // enhanced indexing in one batch after all files are stored
+    if (enhanced && files.length) {
+      statusEl.textContent = 'Generating search questions...';
+      const allChunks = await dbGetByIndex('chunks', 'collection', colId);
+      const repoChunks = allChunks.filter(c => files.some(f => f.filename === c.filename));
+      if (repoChunks.length) {
+        try {
+          const payload = { chunks: repoChunks.slice(0, 30).map(c => ({ id: c.id, text: c.text, source: c.source })) };
+          const qRes = await fetch(baseUrl + '/ingest/questions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          if (qRes.ok) {
+            const qData = await qRes.json();
+            const chunkMap = new Map(repoChunks.map(c => [c.id, c]));
+            for (const item of (qData.results || [])) {
+              const chunk = chunkMap.get(item.id);
+              if (chunk) { chunk.questions = item.questions; await dbPut('chunks', chunk); }
+            }
+            await rebuildBM25();
+          }
+        } catch (e) { /* enhanced indexing is optional */ }
+      }
+    }
+
+    await renderCollections();
+    updateChatSelector();
+    statusEl.textContent = '';
+    closeModal('githubModal');
+    showStatus('Ingested ' + files.length + ' files (' + totalChunks + ' chunks) from ' + url, 'success');
+
+  } catch (e) {
+    statusEl.textContent = 'Error: ' + e.message;
+    showStatus('GitHub ingest failed: ' + e.message, 'error');
   } finally {
-    disableButtons(false);
+    btn.disabled = false;
+    btn.textContent = 'Clone & Ingest';
   }
 }
 
-// Setup chat functionality
-function setupChat() {
-  document.getElementById('chatProject').addEventListener('change', function(e) {
-    const projectPath = e.target.value;
-    if (projectPath === 'all') {
-      selectedProject = null;
-      document.getElementById('chatMessages').innerHTML = '';
-      addMessage('assistant', 'Ready to chat about all documents. Ask me anything!');
-      showStatus('Selected all projects', 'info');
-    } else if (projectPath) {
-      const [team, project] = projectPath.split('/');
-      selectProject(team, project);
-    }
-  });
-}
-
-// Handle chat message sending
+// ── Chat ──────────────────────────────────────────────────────────────────────
 async function sendMessage() {
   const input = document.getElementById('chatInput');
   const message = input.value.trim();
-
   if (!message) return;
 
-  // Add user message to chat
   addMessage('user', message);
   input.value = '';
 
-  // Disable send button during processing
-  const sendButton = document.getElementById('sendButton');
-  sendButton.disabled = true;
-  sendButton.textContent = 'Thinking...';
+  const btn = document.getElementById('sendButton');
+  btn.disabled = true;
+  btn.textContent = '...';
 
   try {
-    const body = {
+    const { mode, chunks } = await retrieve(message, selectedCollection || null);
+
+    const payload = {
       query: message,
-      top_k: 5,
-      use_llm: true
+      history: chatHistory.slice(-6),
     };
-    if (selectedProject) {
-      body.team = selectedProject.team;
-      body.project = selectedProject.project;
+
+    const mapped = chunks.map(c => ({ id: c.id, text: c.text, source: c.source || c.filename }));
+    if (mode === 'full') {
+      payload.chunks = mapped;
+    } else {
+      payload.candidates = mapped;
     }
 
-    const response = await fetch(`${baseUrl}/query`, {
+    const res = await fetch(baseUrl + '/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
+      body: JSON.stringify(payload),
     });
 
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`${response.status}: ${error}`);
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(res.status + ': ' + errText);
     }
 
-    const result = await response.json();
+    const data = await res.json();
+    const answer = data.answer || 'No answer returned.';
 
-    // Format response
-    let responseText = '';
+    addMessage('assistant', answer);
+    chatHistory.push({ role: 'user', content: message });
+    chatHistory.push({ role: 'assistant', content: answer });
+    if (chatHistory.length > 40) chatHistory = chatHistory.slice(-40);
 
-    if (result.llm_error) {
-      responseText = `Error: ${result.llm_error}`;
-    } else if (result.answer) {
-      responseText = result.answer;
-    } else if (result.retrieved) {
-      // Show retrieved documents
-      responseText = 'Retrieved documents:\n\n';
-      for (const [proj, hits] of Object.entries(result.retrieved)) {
-        hits.forEach(hit => {
-          responseText += `📄 ${hit.source}\n${hit.text.substring(0, 200)}...\n\n`;
-        });
-      }
-    } else {
-      responseText = 'No results found.';
-    }
-
-    addMessage('assistant', responseText);
-
-  } catch (error) {
-    addMessage('assistant', `Error: ${error.message}`);
+  } catch (e) {
+    addMessage('assistant', 'Error: ' + e.message);
   } finally {
-    sendButton.disabled = false;
-    sendButton.textContent = 'Send';
+    btn.disabled = false;
+    btn.textContent = 'Send';
   }
 }
 
-// Handle Enter key in chat input
 function handleKeyPress(event) {
   if (event.key === 'Enter' && !event.shiftKey) {
     event.preventDefault();
@@ -327,221 +545,148 @@ function handleKeyPress(event) {
   }
 }
 
-// Add message to chat
 function addMessage(type, content) {
   const messagesDiv = document.getElementById('chatMessages');
-  const messageDiv = document.createElement('div');
-  messageDiv.className = `message ${type}`;
-  messageDiv.textContent = content;
-  messagesDiv.appendChild(messageDiv);
+  const div = document.createElement('div');
+  div.className = 'message ' + type;
+  div.textContent = content;
+  messagesDiv.appendChild(div);
   messagesDiv.scrollTop = messagesDiv.scrollHeight;
 }
 
-// Toggle project docs expand/collapse
-async function toggleProjectDocs(headerEl, team, project) {
-  const docsEl = document.getElementById(`docs-${team}-${project}`);
-  const chevron = headerEl.querySelector('.project-chevron');
-  const isOpen = docsEl.classList.contains('open');
+// ── Modals ────────────────────────────────────────────────────────────────────
+function showModal(id) { document.getElementById(id).style.display = 'block'; }
+function closeModal(id) { document.getElementById(id).style.display = 'none'; }
 
-  if (isOpen) {
-    docsEl.classList.remove('open');
-    chevron.style.transform = '';
-    return;
+function showNewCollectionModal() {
+  document.getElementById('newCollectionName').value = '';
+  showModal('newCollectionModal');
+}
+
+function showAddDocModal() {
+  if (!collections.length) { showStatus('Create a collection first', 'error'); return; }
+  const sel = document.getElementById('addDocCollection');
+  sel.innerHTML = '';
+  for (const col of collections) {
+    const opt = document.createElement('option');
+    opt.value = col.id;
+    opt.textContent = col.name;
+    if (col.id === selectedCollection) opt.selected = true;
+    sel.appendChild(opt);
   }
+  document.getElementById('addDocFile').value = '';
+  document.getElementById('addDocText').value = '';
+  document.getElementById('addDocFilename').value = '';
+  showModal('addDocModal');
+}
 
-  chevron.style.transform = 'rotate(90deg)';
-  docsEl.classList.add('open');
-  docsEl.innerHTML = '<span class="no-docs">Loading…</span>';
+async function doCreateCollection() {
+  const name = document.getElementById('newCollectionName').value.trim();
+  if (!name) { showStatus('Please enter a collection name', 'error'); return; }
+  await createCollection(name);
+  closeModal('newCollectionModal');
+  showStatus('Collection "' + name + '" created', 'success');
+}
+
+async function doAddDocument() {
+  const colId = document.getElementById('addDocCollection').value;
+  const enhanced = true;
+  const fileInput = document.getElementById('addDocFile');
+  const textContent = document.getElementById('addDocText').value.trim();
+  const manualFilename = document.getElementById('addDocFilename').value.trim();
+
+  if (!colId) { showStatus('Select a collection', 'error'); return; }
+
+  const btn = document.querySelector('#addDocModal .btn-green');
+  btn.disabled = true;
+  btn.textContent = 'Processing...';
 
   try {
-    const resp = await fetch(`${baseUrl}/projects/${team}/${project}/docs`);
-    const data = await resp.json();
-    const docs = data.docs || [];
-    if (docs.length === 0) {
-      docsEl.innerHTML = '<span class="no-docs">No documents ingested yet.</span>';
+    if (fileInput.files && fileInput.files.length > 0) {
+      for (const file of fileInput.files) {
+        const text = await file.text();
+        await ingestText(text, file.name, colId, enhanced);
+      }
+    } else if (textContent) {
+      const filename = manualFilename || ('note-' + new Date().toISOString().slice(0, 10) + '.txt');
+      await ingestText(textContent, filename, colId, enhanced);
     } else {
-      docsEl.innerHTML = docs.map(d => {
-        const isUrl = d.startsWith('http://') || d.startsWith('https://');
-        return `<div class="doc-item">${isUrl ? `<a href="${d}" target="_blank">${d}</a>` : `📄 ${d}`}</div>`;
-      }).join('');
+      showStatus('Provide a file or paste text', 'error');
+      btn.disabled = false;
+      btn.textContent = 'Add Document';
+      return;
     }
+
+    await renderCollections();
+    updateChatSelector();
+    closeModal('addDocModal');
   } catch (e) {
-    docsEl.innerHTML = `<span class="no-docs">Error loading docs: ${e.message}</span>`;
+    showStatus('Failed: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Add Document';
   }
 }
 
-// Show status message
-function showStatus(message, type = 'info') {
+// ── Status bar ────────────────────────────────────────────────────────────────
+function showStatus(msg, type) {
+  type = type || 'info';
   const bar = document.getElementById('statusBar');
-  bar.textContent = message;
+  bar.textContent = msg;
   bar.className = type;
   clearTimeout(bar._timer);
-  bar._timer = setTimeout(() => { bar.className = 'hidden'; bar.textContent = ''; }, 5000);
+  bar._timer = setTimeout(function() { bar.className = 'hidden'; bar.textContent = ''; }, 5000);
 }
 
-// Disable/enable buttons during operations
-function disableButtons(disabled) {
-  const buttons = document.querySelectorAll('button');
-  buttons.forEach(button => {
-    if (button.id !== 'sendButton') {
-      button.disabled = disabled;
-    }
+// ── Resizable panes ───────────────────────────────────────────────────────────
+function setupResizablePanes() {
+  const divider = document.getElementById('paneDivider');
+  const leftPane = document.getElementById('leftPane');
+  if (!divider || !leftPane) return;
+  let dragging = false, startX = 0, startWidth = 0;
+  divider.addEventListener('mousedown', function(e) {
+    dragging = true; startX = e.clientX; startWidth = leftPane.getBoundingClientRect().width;
+    divider.classList.add('dragging'); document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none'; e.preventDefault();
+  });
+  document.addEventListener('mousemove', function(e) {
+    if (!dragging) return;
+    var w = Math.max(220, Math.min(600, startWidth + e.clientX - startX));
+    leftPane.style.width = w + 'px'; leftPane.style.minWidth = w + 'px';
+  });
+  document.addEventListener('mouseup', function() {
+    if (!dragging) return;
+    dragging = false; divider.classList.remove('dragging');
+    document.body.style.cursor = ''; document.body.style.userSelect = '';
   });
 }
 
-// Modal functions
-function showModal(modalId) {
-  document.getElementById(modalId).style.display = 'block';
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
-function closeModal(modalId) {
-  document.getElementById(modalId).style.display = 'none';
-}
+// ── Init ──────────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', async function() {
+  setupResizablePanes();
 
-// Dialog show functions
-function showCreateProjectDialog() {
-  showModal('createProjectModal');
-}
+  document.getElementById('chatCollection').addEventListener('change', function(e) {
+    var val = e.target.value;
+    selectedCollection = val === 'all' ? null : val;
+    var col = collections.find(function(c) { return c.id === selectedCollection; });
+    chatHistory = [];
+    document.getElementById('chatMessages').innerHTML = '';
+    addMessage('assistant', selectedCollection
+      ? 'Ready. Ask me anything about "' + (col ? col.name : 'this collection') + '".'
+      : 'Ready. Ask me anything about your knowledge base.');
+  });
 
-function showUploadDialog() {
-  showModal('uploadModal');
-}
+  await loadCollections();
+  await rebuildBM25();
 
-function showAddWebUrlDialog() {
-  showModal('webUrlModal');
-}
-
-function showIngestGitHubDialog() {
-  showModal('githubModal');
-}
-
-// Action functions
-async function doCreateProject() {
-  const team = document.getElementById('newTeam').value;
-  const project = document.getElementById('newProject').value;
-  if (!team || !project) {
-    showStatus('Please provide team and project name', 'error');
-    return;
-  }
-  try {
-    const response = await fetch(`${baseUrl}/projects/create`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ team, project })
-    });
-    if (!response.ok) throw new Error(`${response.status}`);
-    showStatus('Project created successfully', 'success');
-    loadProjects();
-    closeModal('createProjectModal');
-  } catch (error) {
-    showStatus('Failed to create project: ' + error.message, 'error');
-  }
-}
-
-async function doUploadDocument() {
-  const projectPath = document.getElementById('actionProject').value;
-  const filename = document.getElementById('uploadFilename').value;
-  const content = document.getElementById('uploadContent').value;
-  if (!projectPath || !filename || !content) {
-    showStatus('Please select project, provide filename, and content', 'error');
-    return;
-  }
-  const [team, project] = projectPath.split('/');
-  try {
-    const response = await fetch(`${baseUrl}/upload`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ team, project, filename, content, doc_type: 'uploaded' })
-    });
-    if (!response.ok) throw new Error(`${response.status}`);
-    showStatus('Document uploaded successfully', 'success');
-    closeModal('uploadModal');
-  } catch (error) {
-    showStatus('Upload failed: ' + error.message, 'error');
-  }
-}
-
-async function doAddWebUrl() {
-  const projectPath = document.getElementById('actionProject').value;
-  const url = document.getElementById('webUrl').value;
-  if (!projectPath || !url) {
-    showStatus('Please select project and provide URL', 'error');
-    return;
-  }
-  const [team, project] = projectPath.split('/');
-  try {
-    const response = await fetch(`${baseUrl}/ingest`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ team, project, source: url, doc_type: 'web' })
-    });
-    if (!response.ok) throw new Error(`${response.status}`);
-    showStatus('Web URL ingested successfully', 'success');
-    loadProjects();
-    closeModal('webUrlModal');
-  } catch (error) {
-    showStatus('Ingestion failed: ' + error.message, 'error');
-  }
-}
-
-async function doIngestGitHubModal() {
-  const projectPath = document.getElementById('actionProject').value;
-  const githubUrl = document.getElementById('githubUrl').value;
-  if (!projectPath || !githubUrl) {
-    showStatus('Please select project and provide GitHub URL', 'error');
-    return;
-  }
-  const [team, project] = projectPath.split('/');
-  try {
-    const response = await fetch(`${baseUrl}/ingest`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ team, project, source: githubUrl, doc_type: 'mixed' })
-    });
-    if (!response.ok) throw new Error(`${response.status}`);
-    showStatus('GitHub ingested successfully', 'success');
-    loadProjects();
-    closeModal('githubModal');
-  } catch (error) {
-    showStatus('Ingestion failed: ' + error.message, 'error');
-  }
-}
-
-// Rename project
-let _renameTarget = null;
-
-function showRenameDialog(team, project) {
-  _renameTarget = { team, project };
-  document.getElementById('renameCurrentLabel').textContent = `Current: ${team}/${project}`;
-  document.getElementById('renameNewName').value = project;
-  showModal('renameModal');
-}
-
-async function doRenameProject() {
-  if (!_renameTarget) return;
-  const newName = document.getElementById('renameNewName').value.trim();
-  if (!newName || newName === _renameTarget.project) {
-    showStatus('Please enter a different project name', 'error');
-    return;
-  }
-  try {
-    const response = await fetch(`${baseUrl}/projects/rename`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ team: _renameTarget.team, old_project: _renameTarget.project, new_project: newName })
-    });
-    if (!response.ok) {
-      const err = await response.json();
-      throw new Error(err.detail || response.status);
-    }
-    showStatus(`Renamed to ${_renameTarget.team}/${newName}`, 'success');
-    if (selectedProject && selectedProject.team === _renameTarget.team && selectedProject.project === _renameTarget.project) {
-      selectedProject = null;
-    }
-    _renameTarget = null;
-    loadProjects();
-    closeModal('renameModal');
-  } catch (error) {
-    showStatus('Rename failed: ' + error.message, 'error');
-  }
-}
+  addMessage('assistant', collections.length
+    ? 'Welcome back! Select a collection and ask me anything.'
+    : 'Welcome! Create a collection and add documents to get started.');
+});

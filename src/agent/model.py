@@ -11,16 +11,14 @@ def call_hf_chat(system: str, user_prompt: str, access_token: Optional[str] = No
         raise RuntimeError("HF_ACCESS_TOKEN not set")
 
     hf_model = os.environ.get("HF_MODEL", model)
-    # Seq2seq models don't support chat completions — fall back to default
-    _SEQ2SEQ_PREFIXES = ("google/flan", "google/t5", "t5-", "facebook/bart")
-    if any(hf_model.lower().startswith(p) for p in _SEQ2SEQ_PREFIXES):
-        hf_model = model
+
+    timeout_s = float(os.environ.get("HF_TIMEOUT_SECONDS", "60"))
+    max_tokens = int(os.environ.get("HF_MAX_TOKENS", "512"))
 
     try:
-        timeout_s = float(os.environ.get("HF_TIMEOUT_SECONDS", "40"))
-        max_tokens = int(os.environ.get("HF_MAX_TOKENS", "256"))
-        client = InferenceClient(model=hf_model, token=access_token, timeout=timeout_s)
+        client = InferenceClient(token=access_token, timeout=timeout_s)
         response = client.chat_completion(
+            model=hf_model,
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": user_prompt},

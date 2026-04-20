@@ -1,7 +1,7 @@
 import argparse
 import os
 import json
-from typing import Optional
+from typing import Optional, List, Dict, Any
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -39,6 +39,30 @@ class QueryPayload(BaseModel):
     project: Optional[str] = None
     top_k: int = 5
     use_llm: bool = False
+
+
+# ── New local-first endpoints ──────────────────────────────────────────────────
+
+class ChunkItem(BaseModel):
+    id: str
+    text: str
+    source: Optional[str] = "unknown"
+
+
+class ChatPayload(BaseModel):
+    query: str
+    candidates: Optional[List[ChunkItem]] = None   # BM25 results from browser
+    chunks: Optional[List[ChunkItem]] = None        # full-context mode
+    history: Optional[List[Dict[str, str]]] = None
+
+
+class QuestionsPayload(BaseModel):
+    chunks: List[ChunkItem]
+
+
+class GitHubFetchPayload(BaseModel):
+    url: str                             # GitHub repo URL
+    max_files: Optional[int] = 200      # safety cap
 
 
 app = FastAPI(title="RAG Agent API")
@@ -198,6 +222,144 @@ def api_query(p: QueryPayload):
             return {"retrieved": results, "llm_error": str(e)}
         return {"retrieved": results, "answer": answer}
     return {"retrieved": results}
+
+
+# ── Local-first: stateless chat (context sent from browser) ───────────────────
+
+@app.post("/chat")
+def chat_endpoint(payload: ChatPayload):
+    api_key = os.environ.get("HF_ACCESS_TOKEN")
+    mock_mode = not api_key or os.environ.get("MOCK_LLM", "").lower() in ("1", "true", "yes")
+
+    # Accept either full-context chunks or BM25 candidate chunks
+    context_items = payload.chunks or payload.candidates or []
+
+    max_context_chars = int(os.environ.get("MAX_CONTEXT_CHARS", "12000"))
+    context_parts = []
+    total = 0
+    for c in context_items[:25]:
+        entry = f"[Source: {c.source}]\n{c.text}"
+        if total + len(entry) > max_context_chars:
+            break
+        context_parts.append(entry)
+        total += len(entry)
+
+    context_str = "\n\n---\n\n".join(context_parts) if context_parts else "No documents provided."
+
+    system = (
+        "You are a helpful personal knowledge base assistant. "
+        "Answer questions using only the provided document context. "
+        "If the answer is not found in the context, say so clearly. "
+        "Be concise. Cite the source filename when relevant."
+    )
+
+    history = payload.history or []
+    history_text = ""
+    for msg in history[-6:]:
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+        prefix = "User" if role == "user" else "Assistant"
+        history_text += f"{prefix}: {content}\n"
+
+    prompt = (
+        f"Document context:\n{context_str}\n\n"
+        + (f"Conversation so far:\n{history_text}\n" if history_text else "")
+        + f"User: {payload.query}\n\nAnswer:"
+    )
+
+    model = os.environ.get("HF_MODEL", "Qwen/Qwen2.5-1.5B-Instruct")
+
+    if mock_mode:
+        sources = list({c.source for c in context_items[:5]})
+        snippet = context_parts[0][:200] if context_parts else "no context"
+        answer = (
+            f"[MOCK MODE — no HF_ACCESS_TOKEN set]\n\n"
+            f"Query: {payload.query}\n\n"
+            f"Retrieved {len(context_items)} chunk(s) from: {', '.join(sources) or 'none'}.\n\n"
+            f"First chunk preview: \"{snippet}...\""
+        )
+        return {"answer": answer}
+
+    try:
+        answer = call_hf_chat(system, prompt, api_key, model)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return {"answer": answer}
+
+
+# ── Local-first: generate search-index questions per chunk ────────────────────
+
+@app.post("/ingest/questions")
+def generate_questions_endpoint(payload: QuestionsPayload):
+    api_key = os.environ.get("HF_ACCESS_TOKEN")
+    if not api_key:
+        return {"results": [{"id": c.id, "questions": []} for c in payload.chunks]}
+
+    model = os.environ.get("HF_MODEL", "Qwen/Qwen2.5-1.5B-Instruct")
+    results = []
+
+    for chunk in payload.chunks[:30]:          # cap to avoid rate limiting
+        try:
+            prompt = (
+                f"Read this passage and write exactly 3 short questions it answers. "
+                f"Return only the questions, one per line, no numbering or bullets.\n\n"
+                f"Passage: {chunk.text[:800]}\n\nQuestions:"
+            )
+            raw = call_hf_chat(
+                "You write concise search-index questions for document retrieval.",
+                prompt, api_key, model,
+            )
+            questions = [
+                q.strip().lstrip("0123456789.-) ")
+                for q in raw.strip().split("\n")
+                if q.strip() and len(q.strip()) > 8
+            ][:5]
+        except Exception:
+            questions = []
+
+        results.append({"id": chunk.id, "questions": questions})
+
+    return {"results": results}
+
+
+# ── Local-first: fetch GitHub repo contents → return to browser for local ingest
+
+@app.post("/fetch/github")
+def fetch_github(payload: GitHubFetchPayload):
+    import tempfile, shutil
+    from .ingest import _clone_repo
+    from .utils import list_source_files, read_text_file
+
+    url = payload.url.strip()
+    if not (url.startswith("https://") or url.startswith("http://") or url.startswith("git@")):
+        raise HTTPException(status_code=400, detail="Invalid git URL")
+
+    tmp = tempfile.mkdtemp(prefix="rag_gh_")
+    try:
+        try:
+            _clone_repo(url, tmp)
+        except Exception as e:
+            raise HTTPException(status_code=422, detail=f"git clone failed: {e}")
+
+        files = list_source_files(tmp)[:payload.max_files]
+        results = []
+        for fpath in files:
+            try:
+                text = read_text_file(fpath)
+                if not text.strip():
+                    continue
+                rel = os.path.relpath(fpath, tmp).replace("\\", "/")
+                results.append({"filename": rel, "text": text})
+            except Exception:
+                continue
+
+        if not results:
+            raise HTTPException(status_code=422, detail="No readable text files found in repo")
+
+        return {"url": url, "files": results}
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def main():
