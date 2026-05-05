@@ -5,6 +5,10 @@ port: 7860
 
 # RAG Agent — Personal Knowledge Base
 
+[![HuggingFace Space](https://img.shields.io/badge/🤗%20HuggingFace-Live%20Demo-orange)](https://huggingface.co/spaces/muskankhaneja03/RAG-KnowledgeAgent)
+
+**Live Demo:** [huggingface.co/spaces/muskankhaneja03/RAG-KnowledgeAgent](https://huggingface.co/spaces/muskankhaneja03/RAG-KnowledgeAgent)
+
 A personal, browser-first Retrieval-Augmented Generation (RAG) system. All your document data lives in your browser (IndexedDB); the server is **100% stateless** — it only receives context and a query, then returns an LLM-generated answer. No database, no user accounts, no server-side storage.
 
 ---
