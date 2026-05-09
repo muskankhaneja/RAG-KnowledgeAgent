@@ -1,12 +1,14 @@
 import argparse
 import os
 import json
+import time
+import collections
 from typing import Optional, List, Dict, Any
 
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI, HTTPException, Response, Body
+from fastapi import FastAPI, HTTPException, Response, Body, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -66,6 +68,27 @@ class GitHubFetchPayload(BaseModel):
 
 
 app = FastAPI(title="RAG Agent API")
+
+# ── Rate limiter (in-memory, per IP) ──────────────────────────────────────────
+_RATE_LIMIT  = int(os.environ.get("RATE_LIMIT_RPM", "20"))   # max requests per window
+_RATE_WINDOW = int(os.environ.get("RATE_LIMIT_WINDOW", "60")) # window size in seconds
+_rate_store: Dict[str, collections.deque] = {}
+
+def _check_rate_limit(ip: str) -> None:
+    """Raise 429 if the IP has exceeded RATE_LIMIT_RPM in the last RATE_WINDOW seconds."""
+    now = time.time()
+    if ip not in _rate_store:
+        _rate_store[ip] = collections.deque()
+    dq = _rate_store[ip]
+    # drop timestamps outside the window
+    while dq and now - dq[0] > _RATE_WINDOW:
+        dq.popleft()
+    if len(dq) >= _RATE_LIMIT:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded: max {_RATE_LIMIT} requests per {_RATE_WINDOW}s. Please wait and try again."
+        )
+    dq.append(now)
 
 # Serve static front-end UI from /static
 static_dir = os.path.join(os.path.dirname(__file__), "..", "static")
@@ -227,7 +250,10 @@ def api_query(p: QueryPayload):
 # ── Local-first: stateless chat (context sent from browser) ───────────────────
 
 @app.post("/chat")
-def chat_endpoint(payload: ChatPayload):
+def chat_endpoint(payload: ChatPayload, request: Request):
+    client_ip = request.headers.get("x-forwarded-for", request.client.host).split(",")[0].strip()
+    _check_rate_limit(client_ip)
+
     api_key = os.environ.get("HF_ACCESS_TOKEN") or os.environ.get("HF_TOKEN")
     mock_mode = not api_key or os.environ.get("MOCK_LLM", "").lower() in ("1", "true", "yes")
 
