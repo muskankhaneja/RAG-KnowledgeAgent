@@ -2,7 +2,7 @@ import os
 from typing import Optional
 
 
-def call_hf_chat(system: str, user_prompt: str, access_token: Optional[str] = None, model: str = "Qwen/Qwen2.5-1.5B-Instruct") -> str:
+def call_hf_chat(system: str, user_prompt: str, access_token: Optional[str] = None, model: str = "HuggingFaceH4/zephyr-7b-beta") -> str:
     from huggingface_hub import InferenceClient
 
     if access_token is None:
