@@ -196,7 +196,7 @@ def api_query(p: QueryPayload):
     top_k = max(1, min(int(p.top_k or 5), 5))
     results = query(p.team, p.project, p.query, top_k)
     if p.use_llm:
-        api_key = os.environ.get("HF_ACCESS_TOKEN")
+        api_key = os.environ.get("HF_ACCESS_TOKEN") or os.environ.get("HF_TOKEN")
         if not api_key:
             # return raw docs if no key
             return {"retrieved": results, "llm": None, "note": "HF_ACCESS_TOKEN not set"}
@@ -228,7 +228,7 @@ def api_query(p: QueryPayload):
 
 @app.post("/chat")
 def chat_endpoint(payload: ChatPayload):
-    api_key = os.environ.get("HF_ACCESS_TOKEN")
+    api_key = os.environ.get("HF_ACCESS_TOKEN") or os.environ.get("HF_TOKEN")
     mock_mode = not api_key or os.environ.get("MOCK_LLM", "").lower() in ("1", "true", "yes")
 
     # Accept either full-context chunks or BM25 candidate chunks
@@ -292,7 +292,7 @@ def chat_endpoint(payload: ChatPayload):
 
 @app.post("/ingest/questions")
 def generate_questions_endpoint(payload: QuestionsPayload):
-    api_key = os.environ.get("HF_ACCESS_TOKEN")
+    api_key = os.environ.get("HF_ACCESS_TOKEN") or os.environ.get("HF_TOKEN")
     if not api_key:
         return {"results": [{"id": c.id, "questions": []} for c in payload.chunks]}
 

@@ -6,7 +6,7 @@ def call_hf_chat(system: str, user_prompt: str, access_token: Optional[str] = No
     from huggingface_hub import InferenceClient
 
     if access_token is None:
-        access_token = os.environ.get("HF_ACCESS_TOKEN")
+        access_token = os.environ.get("HF_ACCESS_TOKEN") or os.environ.get("HF_TOKEN")
     if not access_token:
         raise RuntimeError("HF_ACCESS_TOKEN not set")
 
