@@ -15,7 +15,7 @@ let chatHistory = [];
 
 // ── IndexedDB layer ───────────────────────────────────────────────────────────
 const DB_NAME = 'rag-kb';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 let _db = null;
 
 function openDB() {
@@ -31,6 +31,9 @@ function openDB() {
         const s = d.createObjectStore('chunks', { keyPath: 'id' });
         s.createIndex('collection', 'collection', { unique: false });
         s.createIndex('filename', 'filename', { unique: false });
+      }
+      if (!d.objectStoreNames.contains('chat_sessions')) {
+        d.createObjectStore('chat_sessions', { keyPath: 'id' });
       }
     };
     req.onsuccess = (e) => { _db = e.target.result; resolve(_db); };
@@ -485,23 +488,27 @@ async function doIngestGitHub() {
 
 // ── Chat persistence ─────────────────────────────────────────────────────────
 async function saveChatHistory() {
-  await dbPut('collections', { id: '__chat_history__', messages: chatHistory, savedAt: Date.now() });
+  const d = await openDB();
+  await new Promise((resolve, reject) => {
+    const tx = d.transaction('chat_sessions', 'readwrite');
+    tx.objectStore('chat_sessions').put({ id: 'current', messages: chatHistory, savedAt: Date.now() });
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
+  });
 }
 
 async function loadChatHistory() {
   try {
     const d = await openDB();
-    // ensure chat_messages store exists (upgrade handled in openDB)
     const saved = await new Promise((resolve, reject) => {
-      const tx = d.transaction('collections', 'readonly');
-      const req = tx.objectStore('collections').get('__chat_history__');
+      const tx = d.transaction('chat_sessions', 'readonly');
+      const req = tx.objectStore('chat_sessions').get('current');
       req.onsuccess = () => resolve(req.result);
       req.onerror  = () => resolve(null);
     });
     if (saved && Array.isArray(saved.messages) && saved.messages.length) {
       chatHistory = saved.messages;
       const messagesDiv = document.getElementById('chatMessages');
-      // clear default welcome message
       messagesDiv.innerHTML = '';
       for (const msg of chatHistory) {
         addMessage(msg.role === 'user' ? 'user' : 'assistant', msg.content);
