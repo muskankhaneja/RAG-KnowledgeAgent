@@ -293,7 +293,7 @@ def chat_endpoint(payload: ChatPayload, request: Request):
         + f"User: {payload.query}\n\nAnswer:"
     )
 
-    model = os.environ.get("HF_MODEL", "HuggingFaceH4/zephyr-7b-beta")
+    model = os.environ.get("HF_MODEL", "Qwen/Qwen2.5-1.5B-Instruct")
 
     if mock_mode:
         sources = list({c.source for c in context_items[:5]})
