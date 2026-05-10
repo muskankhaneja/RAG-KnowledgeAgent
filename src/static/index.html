@@ -8,18 +8,18 @@
     @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
 
     :root {
-      /* Canvas */
-      --bg:            #1a1a1a;
-      --bg-panel:      #232323;
-      --bg-surface:    #2a2a2a;
-      --bg-hover:      #2f2f2f;
-      --bg-input:      #1e1e1e;
+      /* Canvas — dark blue/slate */
+      --bg:            #0f172a;
+      --bg-panel:      #1e293b;
+      --bg-surface:    #1e2d40;
+      --bg-hover:      #273549;
+      --bg-input:      #0f172a;
 
-      /* Brand — orange */
-      --accent:        #c2410c;
-      --accent-dim:    #9a3412;
-      --accent-glow:   rgba(194,65,12,0.18);
-      --accent2:       #ea580c;
+      /* Brand — blue */
+      --accent:        #3b82f6;
+      --accent-dim:    #2563eb;
+      --accent-glow:   rgba(59,130,246,0.2);
+      --accent2:       #60a5fa;
 
       /* Semantic */
       --green:         #22c55e;
@@ -27,24 +27,24 @@
       --red:           #ef4444;
 
       /* Neutrals */
-      --muted:         #3f3f3f;
-      --text:          #f5f5f5;
-      --text-dim:      #a3a3a3;
-      --text-muted:    #6b6b6b;
-      --border:        #333333;
-      --border-subtle: #2a2a2a;
+      --muted:         #334155;
+      --text:          #e2e8f0;
+      --text-dim:      #94a3b8;
+      --text-muted:    #64748b;
+      --border:        #1e3a5f;
+      --border-subtle: #1e293b;
 
       /* Sidebar tokens */
-      --sb-bg1:        #111111;
-      --sb-bg2:        #1a1a1a;
-      --sb-text:       #f0f0f0;
-      --sb-dim:        #9a9a9a;
-      --sb-border:     rgba(249,115,22,0.15);
+      --sb-bg1:        #0a1628;
+      --sb-bg2:        #0f1f38;
+      --sb-text:       #e2e8f0;
+      --sb-dim:        #7a9ab8;
+      --sb-border:     rgba(59,130,246,0.18);
 
       --radius:        10px;
       --radius-lg:     14px;
-      --shadow:        0 4px 20px rgba(0,0,0,0.4);
-      --shadow-lg:     0 12px 40px rgba(0,0,0,0.5);
+      --shadow:        0 4px 20px rgba(0,0,0,0.5);
+      --shadow-lg:     0 12px 40px rgba(0,0,0,0.6);
     }
 
     *, *::before, *::after { box-sizing: border-box; }
@@ -66,7 +66,7 @@
       width: 300px; min-width: 220px;
       background: linear-gradient(160deg, var(--sb-bg1) 0%, var(--sb-bg2) 100%);
       display: flex; flex-direction: column; overflow: hidden;
-      box-shadow: 4px 0 24px rgba(30,27,75,0.25);
+      box-shadow: 4px 0 24px rgba(0,0,0,0.4);
     }
     .left-pane.hidden { display: none; }
 
@@ -77,10 +77,10 @@
     }
     .pane-header-icon {
       width: 34px; height: 34px; border-radius: 9px; flex-shrink: 0;
-      background: linear-gradient(135deg, #c2410c, #ea580c);
+      background: linear-gradient(135deg, #2563eb, #60a5fa);
       display: flex; align-items: center; justify-content: center;
       font-size: 16px; color: #fff;
-      box-shadow: 0 4px 12px rgba(194,65,12,0.45);
+      box-shadow: 0 4px 12px rgba(59,130,246,0.45);
     }
     .pane-header-title {
       font-size: 0.95em; font-weight: 800;
@@ -180,15 +180,15 @@
     }
     button:disabled { opacity: 0.4; cursor: not-allowed; }
 
-    /* Primary — orange gradient */
+    /* Primary — blue gradient */
     button.btn-primary {
       background: linear-gradient(135deg, var(--accent) 0%, var(--accent2) 100%);
       color: #fff; border: none;
-      box-shadow: 0 2px 10px rgba(194,65,12,0.4);
+      box-shadow: 0 2px 10px rgba(59,130,246,0.4);
     }
     button.btn-primary:hover:not(:disabled) {
-      background: linear-gradient(135deg, var(--accent-dim) 0%, #c2410c 100%);
-      box-shadow: 0 4px 14px rgba(194,65,12,0.55);
+      background: linear-gradient(135deg, var(--accent-dim) 0%, #3b82f6 100%);
+      box-shadow: 0 4px 14px rgba(59,130,246,0.55);
       transform: translateY(-1px);
     }
     button.btn-primary:active:not(:disabled) { transform: translateY(0); }
@@ -271,7 +271,7 @@
       background: linear-gradient(135deg, var(--accent), var(--accent2));
       color: #fff; padding: 3px 9px;
       border-radius: 20px; flex-shrink: 0;
-      box-shadow: 0 2px 8px rgba(194,65,12,0.35);
+      box-shadow: 0 2px 8px rgba(59,130,246,0.35);
       letter-spacing: 0.05em;
     }
     /* Sidebar toggle button inside pane header */
@@ -296,7 +296,7 @@
     .sidebar-open-btn {
       display: none; width: 32px; height: 32px; border-radius: 8px; flex-shrink: 0;
       background: var(--accent); color: #fff; font-size: 14px !important;
-      border: none !important; box-shadow: 0 2px 8px rgba(194,65,12,0.4) !important;
+      border: none !important; box-shadow: 0 2px 8px rgba(59,130,246,0.4) !important;
       padding: 0 !important; align-items: center; justify-content: center;
       cursor: pointer; transition: all 0.15s;
       transform: none !important;
@@ -350,7 +350,7 @@
     .message.user {
       background: linear-gradient(135deg, var(--accent) 0%, var(--accent2) 100%);
       color: #fff; align-self: flex-end; border-bottom-right-radius: 3px;
-      box-shadow: 0 3px 12px rgba(194,65,12,0.35);
+      box-shadow: 0 3px 12px rgba(59,130,246,0.35);
     }
     .message.assistant {
       background: var(--bg-surface); color: var(--text);
@@ -366,8 +366,8 @@
       align-items: flex-end; min-height: 60px;
     }
     .chat-input-row textarea {
-      flex: 1; resize: none; margin: 0;
-      min-height: 44px; max-height: 180px;
+      flex: 1; resize: vertical; margin: 0;
+      min-height: 44px; max-height: 400px;
       font-size: 0.9em; line-height: 1.5; border-radius: var(--radius);
       overflow-y: auto;
     }
@@ -404,7 +404,7 @@
     }
     #statusBar.success { background: #14532d22; color: var(--green); border: 1px solid #15803d55; }
     #statusBar.error   { background: #7f1d1d22; color: var(--red);   border: 1px solid #dc262655; }
-    #statusBar.info    { background: rgba(249,115,22,0.1); color: var(--accent); border: 1px solid rgba(249,115,22,0.3); }
+    #statusBar.info    { background: rgba(59,130,246,0.1); color: var(--accent); border: 1px solid rgba(59,130,246,0.3); }
     #statusBar.hidden  { visibility: hidden; }
 
     /* ── Modals ── */
@@ -481,6 +481,7 @@
         <span class="chat-header-label">Context</span>
         <select id="chatCollection"><option value="all">All Collections</option></select>
         <span class="chat-header-badge">RAG</span>
+        <button onclick="clearChat()" title="Clear chat history" style="margin-left:auto;padding:4px 10px;font-size:0.75em;background:rgba(239,68,68,0.15);color:#f87171;border:1px solid rgba(239,68,68,0.3);border-radius:6px;">&#128465; Clear Chat</button>
       </div>
 
       <div class="chat-container">

@@ -483,6 +483,41 @@ async function doIngestGitHub() {
   }
 }
 
+// ── Chat persistence ─────────────────────────────────────────────────────────
+async function saveChatHistory() {
+  await dbPut('collections', { id: '__chat_history__', messages: chatHistory, savedAt: Date.now() });
+}
+
+async function loadChatHistory() {
+  try {
+    const d = await openDB();
+    // ensure chat_messages store exists (upgrade handled in openDB)
+    const saved = await new Promise((resolve, reject) => {
+      const tx = d.transaction('collections', 'readonly');
+      const req = tx.objectStore('collections').get('__chat_history__');
+      req.onsuccess = () => resolve(req.result);
+      req.onerror  = () => resolve(null);
+    });
+    if (saved && Array.isArray(saved.messages) && saved.messages.length) {
+      chatHistory = saved.messages;
+      const messagesDiv = document.getElementById('chatMessages');
+      // clear default welcome message
+      messagesDiv.innerHTML = '';
+      for (const msg of chatHistory) {
+        addMessage(msg.role === 'user' ? 'user' : 'assistant', msg.content);
+      }
+    }
+  } catch (e) { /* ignore, start fresh */ }
+}
+
+async function clearChat() {
+  if (!confirm('Clear all chat history?')) return;
+  chatHistory = [];
+  const messagesDiv = document.getElementById('chatMessages');
+  messagesDiv.innerHTML = '<div class="message assistant">Hello! Select a collection and ask me anything about your documents.</div>';
+  await saveChatHistory();
+}
+
 // ── Chat ──────────────────────────────────────────────────────────────────────
 async function sendMessage() {
   const input = document.getElementById('chatInput');
@@ -529,6 +564,7 @@ async function sendMessage() {
     chatHistory.push({ role: 'user', content: message });
     chatHistory.push({ role: 'assistant', content: answer });
     if (chatHistory.length > 40) chatHistory = chatHistory.slice(-40);
+    await saveChatHistory();
 
   } catch (e) {
     addMessage('assistant', 'Error: ' + e.message);
@@ -685,8 +721,11 @@ document.addEventListener('DOMContentLoaded', async function() {
 
   await loadCollections();
   await rebuildBM25();
+  await loadChatHistory();
 
-  addMessage('assistant', collections.length
-    ? 'Welcome back! Select a collection and ask me anything.'
-    : 'Welcome! Create a collection and add documents to get started.');
+  if (chatHistory.length === 0) {
+    addMessage('assistant', collections.length
+      ? 'Welcome back! Select a collection and ask me anything.'
+      : 'Welcome! Create a collection and add documents to get started.');
+  }
 });
