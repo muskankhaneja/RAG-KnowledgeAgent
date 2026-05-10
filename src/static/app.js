@@ -26,6 +26,7 @@ function openDB() {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
     req.onupgradeneeded = (e) => {
       const d = e.target.result;
+      const tx = e.target.transaction;
       if (!d.objectStoreNames.contains('collections')) {
         d.createObjectStore('collections', { keyPath: 'id' });
       }
@@ -37,6 +38,12 @@ function openDB() {
       if (!d.objectStoreNames.contains('chat_sessions')) {
         const ss = d.createObjectStore('chat_sessions', { keyPath: 'id' });
         ss.createIndex('updatedAt', 'updatedAt', { unique: false });
+      } else {
+        // Upgrade existing store: add updatedAt index if missing (v2 → v3)
+        const ss = tx.objectStore('chat_sessions');
+        if (!ss.indexNames.contains('updatedAt')) {
+          ss.createIndex('updatedAt', 'updatedAt', { unique: false });
+        }
       }
     };
     req.onsuccess = (e) => { _db = e.target.result; resolve(_db); };
@@ -836,6 +843,20 @@ document.addEventListener('DOMContentLoaded', async function() {
     selectedCollection = val === 'all' ? null : val;
   });
 
-  await loadCollections();
-  await rebuildBM25();
-  await loadChatHistory();
+  try {
+    await loadCollections();
+    await rebuildBM25();
+  } catch (e) {
+    console.error('Failed to load collections:', e);
+  }
+
+  try {
+    await loadChatHistory();
+  } catch (e) {
+    console.error('Failed to load chat history:', e);
+    currentSessionId = uid();
+    chatHistory = [];
+    const md = document.getElementById('chatMessages');
+    if (md) md.innerHTML = '<div class="message assistant">Welcome! Create a collection and add documents to get started.</div>';
+  }
+});
