@@ -16,7 +16,7 @@ def call_hf_chat(system: str, user_prompt: str, access_token: Optional[str] = No
     max_tokens = int(os.environ.get("HF_MAX_TOKENS", "512"))
 
     try:
-        client = InferenceClient(token=access_token, timeout=timeout_s, provider="hf-inference")
+        client = InferenceClient(token=access_token, timeout=timeout_s)
         response = client.chat_completion(
             model=hf_model,
             messages=[
