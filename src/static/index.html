@@ -519,6 +519,7 @@
           <button onclick="showNewCollectionModal()" class="btn-primary full">+ New Collection</button>
           <button onclick="showAddDocModal()" class="btn-secondary">↑ Add Doc</button>
           <button onclick="showGitHubModal()" class="btn-secondary">⎇ GitHub</button>
+          <button onclick="showUrlModal()" class="btn-secondary">🌐 Web URL</button>
           <button onclick="exportKB()" class="btn-secondary">⬇ Export</button>
           <button onclick="triggerImport()" class="btn-secondary">⬆ Import</button>
         </div>
@@ -605,6 +606,24 @@
       <div id="githubStatus" style="margin-top:10px;font-size:0.82em;color:var(--text-dim);min-height:18px"></div>
       <div class="btn-row" style="margin-top:14px">
         <button onclick="doIngestGitHub()" class="btn-green" id="githubIngestBtn">Clone &amp; Ingest</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Web URL ingest modal -->
+  <div id="urlModal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Ingest Web Page</h3>
+        <span class="close" onclick="closeModal('urlModal')">&times;</span>
+      </div>
+      <label>Collection</label>
+      <select id="urlCollection"></select>
+      <label style="margin-top:10px">Page URL</label>
+      <input id="urlInput" placeholder="https://example.com/article" type="url"/>
+      <div id="urlStatus" style="margin-top:10px;font-size:0.82em;color:var(--text-dim);min-height:18px"></div>
+      <div class="btn-row" style="margin-top:14px">
+        <button onclick="doIngestUrl()" class="btn-green" id="urlIngestBtn">Fetch &amp; Ingest</button>
       </div>
     </div>
   </div>

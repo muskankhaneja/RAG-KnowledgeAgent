@@ -496,6 +496,68 @@ async function doIngestGitHub() {
   }
 }
 
+// ── Web URL ingest ────────────────────────────────────────────────────────────
+function showUrlModal() {
+  if (!collections.length) { showStatus('Create a collection first', 'error'); return; }
+  const sel = document.getElementById('urlCollection');
+  sel.innerHTML = '';
+  for (const col of collections) {
+    const opt = document.createElement('option');
+    opt.value = col.id; opt.textContent = col.name;
+    if (col.id === selectedCollection) opt.selected = true;
+    sel.appendChild(opt);
+  }
+  document.getElementById('urlInput').value = '';
+  document.getElementById('urlStatus').textContent = '';
+  showModal('urlModal');
+}
+
+async function doIngestUrl() {
+  const colId = document.getElementById('urlCollection').value;
+  const url = document.getElementById('urlInput').value.trim();
+  const statusEl = document.getElementById('urlStatus');
+  const btn = document.getElementById('urlIngestBtn');
+
+  if (!url) { showStatus('Please enter a URL', 'error'); return; }
+  if (!colId) { showStatus('Select a collection', 'error'); return; }
+
+  btn.disabled = true;
+  btn.textContent = 'Fetching...';
+  statusEl.textContent = 'Fetching page...';
+
+  try {
+    const res = await fetch(baseUrl + '/fetch/url', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || res.statusText);
+    }
+
+    const data = await res.json();
+    statusEl.textContent = 'Indexing page content...';
+    btn.textContent = 'Indexing...';
+
+    const chunks = await ingestText(data.text, data.filename, colId, true);
+
+    await renderCollections();
+    updateChatSelector();
+    statusEl.textContent = '';
+    closeModal('urlModal');
+    showStatus('Ingested "' + data.filename + '" (' + chunks + ' chunks)', 'success');
+
+  } catch (e) {
+    statusEl.textContent = 'Error: ' + e.message;
+    showStatus('URL ingest failed: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Fetch & Ingest';
+  }
+}
+
 // ── Chat persistence ─────────────────────────────────────────────────────────
 async function listSessions() {
   const d = await openDB();

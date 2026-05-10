@@ -67,6 +67,10 @@ class GitHubFetchPayload(BaseModel):
     max_files: Optional[int] = 200      # safety cap
 
 
+class UrlFetchPayload(BaseModel):
+    url: str                             # Web page URL
+
+
 app = FastAPI(title="RAG Agent API")
 
 # ── Rate limiter (in-memory, per IP) ──────────────────────────────────────────
@@ -386,6 +390,63 @@ def fetch_github(payload: GitHubFetchPayload):
         return {"url": url, "files": results}
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ── Local-first: fetch a web page → return clean text to browser for local ingest
+
+@app.post("/fetch/url")
+def fetch_url(payload: UrlFetchPayload):
+    import re
+    import html as html_module
+
+    url = payload.url.strip()
+    if not (url.startswith("https://") or url.startswith("http://")):
+        raise HTTPException(status_code=400, detail="URL must start with http:// or https://")
+
+    try:
+        import requests as req_lib
+        resp = req_lib.get(
+            url,
+            timeout=15,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; RAG-Agent/1.0)"},
+            allow_redirects=True,
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Failed to fetch URL: {e}")
+
+    content_type = resp.headers.get("content-type", "")
+    if "text/" not in content_type and "application/xhtml" not in content_type:
+        raise HTTPException(status_code=422, detail=f"Unsupported content type: {content_type}")
+
+    raw = resp.text
+
+    # Strip <script>, <style>, <head>, <nav>, <footer> blocks entirely
+    for tag in ("script", "style", "head", "nav", "footer", "header", "aside"):
+        raw = re.sub(rf"<{tag}[^>]*>.*?</{tag}>", " ", raw, flags=re.DOTALL | re.IGNORECASE)
+
+    # Remove all remaining HTML tags
+    text = re.sub(r"<[^>]+>", " ", raw)
+
+    # Decode HTML entities
+    text = html_module.unescape(text)
+
+    # Collapse whitespace
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = text.strip()
+
+    if len(text) < 100:
+        raise HTTPException(status_code=422, detail="Page returned too little readable text")
+
+    # Derive a filename from the URL
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    slug = (parsed.netloc + parsed.path).strip("/").replace("/", "_")
+    slug = re.sub(r"[^\w\-.]", "_", slug)[:80] or "webpage"
+    filename = slug + ".txt"
+
+    return {"url": url, "filename": filename, "text": text}
 
 
 def main():
