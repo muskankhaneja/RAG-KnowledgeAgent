@@ -398,22 +398,62 @@ def fetch_github(payload: GitHubFetchPayload):
 def fetch_url(payload: UrlFetchPayload):
     import re
     import html as html_module
+    import requests as req_lib
+    from urllib.parse import urlparse
 
     url = payload.url.strip()
     if not (url.startswith("https://") or url.startswith("http://")):
         raise HTTPException(status_code=400, detail="URL must start with http:// or https://")
 
-    try:
-        import requests as req_lib
-        resp = req_lib.get(
-            url,
-            timeout=15,
-            headers={"User-Agent": "Mozilla/5.0 (compatible; RAG-Agent/1.0)"},
-            allow_redirects=True,
-        )
-        resp.raise_for_status()
-    except Exception as e:
-        raise HTTPException(status_code=422, detail=f"Failed to fetch URL: {e}")
+    # Realistic browser headers to avoid 403s on sites like Medium
+    browser_headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+    }
+
+    def _fetch(target_url: str):
+        return req_lib.get(target_url, timeout=20, headers=browser_headers, allow_redirects=True)
+
+    parsed_url = urlparse(url)
+    hostname = parsed_url.netloc.lower().lstrip("www.")
+
+    # Build a list of URLs to try in order
+    urls_to_try = [url]
+
+    # Medium: try AMP subdomain as fallback (less aggressively blocked)
+    if "medium.com" in hostname:
+        amp_url = url.replace("medium.com", "amp.medium.com", 1)
+        urls_to_try.append(amp_url)
+
+    resp = None
+    last_error = None
+    for attempt_url in urls_to_try:
+        try:
+            r = _fetch(attempt_url)
+            if r.status_code < 400:
+                resp = r
+                break
+            last_error = f"HTTP {r.status_code} from {attempt_url}"
+        except Exception as e:
+            last_error = str(e)
+
+    if resp is None:
+        # Provide a user-friendly hint for known paywalled/blocked sites
+        hint = ""
+        if "medium.com" in hostname:
+            hint = " Medium blocks automated access. Try copying the article text and using 'Add Doc → Paste text' instead."
+        raise HTTPException(status_code=422, detail=f"Failed to fetch URL: {last_error}.{hint}")
 
     content_type = resp.headers.get("content-type", "")
     if "text/" not in content_type and "application/xhtml" not in content_type:
@@ -440,9 +480,7 @@ def fetch_url(payload: UrlFetchPayload):
         raise HTTPException(status_code=422, detail="Page returned too little readable text")
 
     # Derive a filename from the URL
-    from urllib.parse import urlparse
-    parsed = urlparse(url)
-    slug = (parsed.netloc + parsed.path).strip("/").replace("/", "_")
+    slug = (parsed_url.netloc + parsed_url.path).strip("/").replace("/", "_")
     slug = re.sub(r"[^\w\-.]", "_", slug)[:80] or "webpage"
     filename = slug + ".txt"
 
