@@ -12,10 +12,12 @@ let selectedCollection = null;
 let bm25Index = null;
 let bm25Chunks = [];
 let chatHistory = [];
+let currentSessionId = null;
+let _abortController = null;
 
 // ── IndexedDB layer ───────────────────────────────────────────────────────────
 const DB_NAME = 'rag-kb';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 let _db = null;
 
 function openDB() {
@@ -33,7 +35,8 @@ function openDB() {
         s.createIndex('filename', 'filename', { unique: false });
       }
       if (!d.objectStoreNames.contains('chat_sessions')) {
-        d.createObjectStore('chat_sessions', { keyPath: 'id' });
+        const ss = d.createObjectStore('chat_sessions', { keyPath: 'id' });
+        ss.createIndex('updatedAt', 'updatedAt', { unique: false });
       }
     };
     req.onsuccess = (e) => { _db = e.target.result; resolve(_db); };
@@ -487,41 +490,134 @@ async function doIngestGitHub() {
 }
 
 // ── Chat persistence ─────────────────────────────────────────────────────────
-async function saveChatHistory() {
+async function listSessions() {
   const d = await openDB();
-  await new Promise((resolve, reject) => {
+  return new Promise((resolve, reject) => {
+    const tx = d.transaction('chat_sessions', 'readonly');
+    const req = tx.objectStore('chat_sessions').getAll();
+    req.onsuccess = () => {
+      const all = req.result.filter(s => s.id !== 'current');
+      all.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+      resolve(all);
+    };
+    req.onerror = () => resolve([]);
+  });
+}
+
+async function saveSession(session) {
+  const d = await openDB();
+  return new Promise((resolve, reject) => {
     const tx = d.transaction('chat_sessions', 'readwrite');
-    tx.objectStore('chat_sessions').put({ id: 'current', messages: chatHistory, savedAt: Date.now() });
+    tx.objectStore('chat_sessions').put(session);
     tx.oncomplete = resolve;
     tx.onerror = () => reject(tx.error);
   });
 }
 
+async function deleteSession(sessionId) {
+  const d = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = d.transaction('chat_sessions', 'readwrite');
+    tx.objectStore('chat_sessions').delete(sessionId);
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+async function saveChatHistory() {
+  if (!currentSessionId) return;
+  const title = chatHistory.length > 0
+    ? chatHistory[0].content.slice(0, 50) + (chatHistory[0].content.length > 50 ? '…' : '')
+    : 'New Chat';
+  await saveSession({
+    id: currentSessionId,
+    title,
+    collectionId: selectedCollection,
+    messages: chatHistory,
+    updatedAt: Date.now(),
+  });
+  await renderSessionsList();
+}
+
+async function loadSession(sessionId) {
+  const d = await openDB();
+  const session = await new Promise((resolve, reject) => {
+    const tx = d.transaction('chat_sessions', 'readonly');
+    const req = tx.objectStore('chat_sessions').get(sessionId);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror  = () => resolve(null);
+  });
+  if (!session) return;
+  currentSessionId = session.id;
+  chatHistory = session.messages || [];
+  // restore collection context
+  if (session.collectionId) {
+    selectedCollection = session.collectionId;
+    const sel = document.getElementById('chatCollection');
+    if (sel) sel.value = session.collectionId;
+  }
+  const messagesDiv = document.getElementById('chatMessages');
+  messagesDiv.innerHTML = '';
+  for (const msg of chatHistory) {
+    addMessage(msg.role === 'user' ? 'user' : 'assistant', msg.content);
+  }
+  await renderSessionsList();
+}
+
+async function newChatSession() {
+  currentSessionId = uid();
+  chatHistory = [];
+  const messagesDiv = document.getElementById('chatMessages');
+  messagesDiv.innerHTML = '<div class="message assistant">New chat started. Ask me anything about your documents.</div>';
+  await renderSessionsList();
+}
+
+async function confirmDeleteSession(sessionId, e) {
+  e.stopPropagation();
+  if (!confirm('Delete this chat session?')) return;
+  await deleteSession(sessionId);
+  if (sessionId === currentSessionId) await newChatSession();
+  else await renderSessionsList();
+}
+
+async function renderSessionsList() {
+  const sessions = await listSessions();
+  const container = document.getElementById('sessionsList');
+  if (!container) return;
+  container.innerHTML = '';
+  if (sessions.length === 0) {
+    container.innerHTML = '<div style="font-size:0.75em;color:var(--sb-dim);font-style:italic;padding:4px">No sessions yet.</div>';
+    return;
+  }
+  for (const s of sessions) {
+    const item = document.createElement('div');
+    item.className = 'session-item' + (s.id === currentSessionId ? ' active' : '');
+    item.onclick = () => loadSession(s.id);
+    const date = new Date(s.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    item.innerHTML =
+      '<div class="session-title">' + escapeHtml(s.title || 'Chat') + '</div>' +
+      '<div class="session-meta">' +
+        '<span>' + date + '</span>' +
+        '<button class="session-del" onclick="confirmDeleteSession(\'' + s.id + '\', event)" title="Delete">&#10005;</button>' +
+      '</div>';
+    container.appendChild(item);
+  }
+}
+
 async function loadChatHistory() {
-  try {
-    const d = await openDB();
-    const saved = await new Promise((resolve, reject) => {
-      const tx = d.transaction('chat_sessions', 'readonly');
-      const req = tx.objectStore('chat_sessions').get('current');
-      req.onsuccess = () => resolve(req.result);
-      req.onerror  = () => resolve(null);
-    });
-    if (saved && Array.isArray(saved.messages) && saved.messages.length) {
-      chatHistory = saved.messages;
-      const messagesDiv = document.getElementById('chatMessages');
-      messagesDiv.innerHTML = '';
-      for (const msg of chatHistory) {
-        addMessage(msg.role === 'user' ? 'user' : 'assistant', msg.content);
-      }
-    }
-  } catch (e) { /* ignore, start fresh */ }
+  const sessions = await listSessions();
+  if (sessions.length > 0) {
+    await loadSession(sessions[0].id);
+  } else {
+    await newChatSession();
+  }
 }
 
 async function clearChat() {
-  if (!confirm('Clear all chat history?')) return;
+  if (!confirm('Clear this chat session?')) return;
   chatHistory = [];
   const messagesDiv = document.getElementById('chatMessages');
-  messagesDiv.innerHTML = '<div class="message assistant">Hello! Select a collection and ask me anything about your documents.</div>';
+  messagesDiv.innerHTML = '<div class="message assistant">Chat cleared. Ask me anything about your documents.</div>';
   await saveChatHistory();
 }
 
@@ -533,10 +629,16 @@ async function sendMessage() {
 
   addMessage('user', message);
   input.value = '';
+  input.style.height = '44px';
 
   const btn = document.getElementById('sendButton');
-  btn.disabled = true;
-  btn.textContent = '...';
+  btn.textContent = 'Cancel';
+  btn.onclick = cancelMessage;
+  btn.disabled = false;
+  btn.classList.remove('btn-primary');
+  btn.classList.add('btn-cancel');
+
+  _abortController = new AbortController();
 
   try {
     const { mode, chunks } = await retrieve(message, selectedCollection || null);
@@ -557,6 +659,7 @@ async function sendMessage() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
+      signal: _abortController.signal,
     });
 
     if (!res.ok) {
@@ -574,10 +677,23 @@ async function sendMessage() {
     await saveChatHistory();
 
   } catch (e) {
-    addMessage('assistant', 'Error: ' + e.message);
+    if (e.name === 'AbortError') {
+      addMessage('assistant', '⏹ Response cancelled.');
+    } else {
+      addMessage('assistant', 'Error: ' + e.message);
+    }
   } finally {
-    btn.disabled = false;
+    _abortController = null;
     btn.textContent = 'Send';
+    btn.onclick = sendMessage;
+    btn.classList.remove('btn-cancel');
+    btn.classList.add('btn-primary');
+  }
+}
+
+function cancelMessage() {
+  if (_abortController) {
+    _abortController.abort();
   }
 }
 
@@ -718,21 +834,8 @@ document.addEventListener('DOMContentLoaded', async function() {
   document.getElementById('chatCollection').addEventListener('change', function(e) {
     var val = e.target.value;
     selectedCollection = val === 'all' ? null : val;
-    var col = collections.find(function(c) { return c.id === selectedCollection; });
-    chatHistory = [];
-    document.getElementById('chatMessages').innerHTML = '';
-    addMessage('assistant', selectedCollection
-      ? 'Ready. Ask me anything about "' + (col ? col.name : 'this collection') + '".'
-      : 'Ready. Ask me anything about your knowledge base.');
   });
 
   await loadCollections();
   await rebuildBM25();
   await loadChatHistory();
-
-  if (chatHistory.length === 0) {
-    addMessage('assistant', collections.length
-      ? 'Welcome back! Select a collection and ask me anything.'
-      : 'Welcome! Create a collection and add documents to get started.');
-  }
-});
